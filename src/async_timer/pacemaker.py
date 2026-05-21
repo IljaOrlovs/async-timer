@@ -22,7 +22,7 @@ class TimerPacemaker:
         self._cancel_futs = []
         self._cancel_evt = asyncio.Event()
 
-    def stop_on(self, aws: typing.Sequence[asyncio.Future]):
+    def stop_on(self, aws: typing.Sequence[typing.Awaitable]):
         for el in aws:
             fut = asyncio.ensure_future(el)
             fut.add_done_callback(lambda _fut: self.stop())

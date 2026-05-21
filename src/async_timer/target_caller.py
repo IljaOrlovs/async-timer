@@ -1,12 +1,13 @@
 """This module is responsible for the magic behaviour calling the `target` function."""
 
 import inspect
+import typing
 from collections.abc import Iterator
 
 
 class Caller:
-    target = None
-    get_next_val = None
+    target: typing.Any
+    get_next_val: typing.Optional[typing.Callable[[], typing.Any]] = None
     first_call: bool = True
 
     def __init__(self, target):
@@ -55,13 +56,14 @@ class Caller:
         self.get_next_val = target
         return target_rv
 
-    async def next(self):
+    async def next(self) -> typing.Any:
         """Call `target` one more time."""
         try:
             if self.first_call:
                 rv = self._setup(self.target)
                 self.first_call = False
             else:
+                assert self.get_next_val is not None
                 rv = self.get_next_val()
         except StopIteration as _err:
             raise StopAsyncIteration() from _err

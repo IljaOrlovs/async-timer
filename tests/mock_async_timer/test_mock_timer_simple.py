@@ -22,7 +22,7 @@ async def test_join_works():
     mock_timer = mock_async_timer.MockTimer(target=_target, delay=10_000, start=True)
 
     assert mock_timer.is_running()
-    await mock_timer.wait(), "Wait for it to exit"
+    await mock_timer.wait()  # Wait for it to exit
 
     assert hit_count == 1000
     assert not mock_timer.is_running()
@@ -68,7 +68,7 @@ async def test_event_listener_works():
     )
 
     assert mock_timer.is_running()
-    await mock_timer.wait(), "Wait for it to exit"
+    await mock_timer.wait()  # Wait for it to exit
 
     assert hit_count >= 1000
     assert not mock_timer.is_running()

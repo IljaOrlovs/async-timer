@@ -146,7 +146,11 @@ class Timer(typing.Generic[T]):
         )  # this can raise `asyncio.CancelledError`
 
     async def wait(
-        self, /, hit_count: int = None, hits: int = None, timeout: float = None
+        self,
+        /,
+        hit_count: typing.Optional[int] = None,
+        hits: typing.Optional[int] = None,
+        timeout: typing.Optional[float] = None,
     ) -> typing.Optional[T]:
         """
         Wait for the timer to reach certain hit count

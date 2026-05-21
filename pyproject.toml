@@ -82,6 +82,11 @@ forced-separate = ["tests"]
 [tool.ruff.format]
 quote-style = "double"
 
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["**/__pycache__", ".venv", "docs"]
+reportIncompatibleVariableOverride = false
+
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"
 testpaths = ["tests"]

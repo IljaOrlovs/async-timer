@@ -11,6 +11,10 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write  # Required for PyPI OIDC trusted publishing
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Setup PDM
@@ -24,12 +28,6 @@ jobs:
       - name: Build packages
         run: pdm build
       - name: Publish to Test PyPI
-        env:
-          PDM_PUBLISH_USERNAME: __token__
-          PDM_PUBLISH_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
         run: pdm publish --no-build --repository https://test.pypi.org/legacy/
       - name: Publish to PyPI
-        env:
-          PDM_PUBLISH_USERNAME: __token__
-          PDM_PUBLISH_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: pdm publish --no-build

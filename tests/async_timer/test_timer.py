@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import time
+import typing
 
 import asyncstdlib
 import pytest
@@ -165,7 +166,7 @@ class TestAsyncFunc:
         exc_evt = asyncio.Event()
         vals = []
 
-        def _target() -> int:
+        def _target() -> typing.Iterator[int]:
             for idx in itertools.count():
                 vals.append(idx)
                 yield idx
@@ -239,7 +240,7 @@ class TestAsyncFunc:
     async def test_wait_for_empty(self, count_fn):
         async with async_timer.Timer(10e-15, target=count_fn) as timer:
             rv = await timer.wait(timeout=0.5)
-        assert rv > 3_000
+        assert rv is not None and rv > 3_000
 
     @pytest.mark.asyncio
     async def test_raises_timeout_on_long_wait(self, count_fn):
@@ -289,7 +290,7 @@ class TestAsyncFunc:
             assert timer_rv == exp_rv
 
     def test_repr(self):
-        timer = async_timer.Timer(10, target="Test Function")
+        timer = async_timer.Timer(10, target="Test Function")  # pyright: ignore[reportArgumentType]
         assert repr(timer).startswith(
             """<Timer target='Test Function' delay=10 hit_count=0 exception_callback="""
         )

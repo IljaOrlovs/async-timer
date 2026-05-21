@@ -85,6 +85,29 @@ async def test_mock_timer_restart():
 
 
 @pytest.mark.asyncio
+async def test_mock_pacemaker_stops_during_sleep_await():
+    """Cover the third `_cancel_evt` check in MockPacemaker._try_wait —
+    the one *after* `await self.sleep(delay)`. Triggered by a sleep mock
+    whose side_effect sets the cancel event."""
+    pm = MockPacemaker(delay=10_000)
+    hits = []
+
+    async def _sleep_side_effect(_delay):
+        # Stop the pacemaker during the sleep itself, so the post-sleep
+        # check is what raises StopAsyncIteration.
+        pm._cancel_evt.set()
+
+    pm.sleep.side_effect = _sleep_side_effect
+
+    async for _ in pm:
+        hits.append(1)
+
+    # First iter fires (no sleep), then the second iter awaits sleep which
+    # sets the event, and the post-sleep check stops us.
+    assert hits == [1]
+
+
+@pytest.mark.asyncio
 async def test_mock_pacemaker_is_subclass_of_real():
     """Hook-based construction means MockTimer.pacemaker is the only one ever
     created — no orphan TimerPacemaker hanging around with stop-callbacks."""

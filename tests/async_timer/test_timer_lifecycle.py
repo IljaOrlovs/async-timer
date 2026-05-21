@@ -290,6 +290,18 @@ async def test_restart_without_cancel_aws_does_not_raise():
 
 
 @pytest.mark.asyncio
+async def test_fanout_wait_on_closed_raises_cancelled():
+    """Direct coverage of the FanoutRv `_closed` guard — calling wait()
+    after cancel() must raise CancelledError instead of hanging."""
+    from async_timer.timer import FanoutRv
+
+    fanout: FanoutRv[int] = FanoutRv()
+    fanout.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await fanout.wait()
+
+
+@pytest.mark.asyncio
 async def test_cancel_cb_not_double_called_on_natural_stop():
     """On natural StopIteration from target, cancel_cb fires exactly once."""
     cb_calls = []

@@ -24,14 +24,23 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
     async def _try_wait(self, delay: float):
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return
 
         await self._sleep_until_next_loop_iter()
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return
 
         await self.sleep(delay)
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return
 
     async def _sleep_until_next_loop_iter(self):
         """Awaiting this function will release on the next async loop iteration"""
@@ -52,5 +61,5 @@ class MockTimer(async_timer.Timer):
 
     pacemaker: MockPacemaker
 
-    def _create_pacemaker(self, delay: float) -> MockPacemaker:
-        return MockPacemaker(delay)
+    def _create_pacemaker(self, delay: float, **kwargs) -> MockPacemaker:
+        return MockPacemaker(delay, **kwargs)

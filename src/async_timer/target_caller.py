@@ -17,8 +17,10 @@ import inspect
 import typing
 from collections.abc import Iterator
 
+T = typing.TypeVar("T")
 
-class Caller:
+
+class Caller(typing.Generic[T]):
     """Calls `target` once per tick, normalising the many shapes it can take."""
 
     target: typing.Any
@@ -81,7 +83,7 @@ class Caller:
         self.get_next_val = target
         return target_rv
 
-    async def next(self) -> typing.Any:
+    async def next(self) -> T:
         """Call `target` one more time."""
         try:
             if self.first_call:
@@ -94,4 +96,4 @@ class Caller:
             raise StopAsyncIteration() from _err
         if inspect.isawaitable(rv):
             rv = await rv
-        return rv
+        return typing.cast(T, rv)

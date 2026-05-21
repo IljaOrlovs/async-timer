@@ -12,6 +12,7 @@ import time
 import typing
 
 import async_timer
+from async_timer.pacemaker import PacemakerMode
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
@@ -84,12 +85,15 @@ class Timer(typing.Generic[T]):
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
     hit_count: int = 0  # Number of times the timer has run so far
-    target_caller: "async_timer.target_caller.Caller"
+    target_caller: "async_timer.target_caller.Caller[T]"
 
+    name: typing.Optional[str]
     result_fanout: FanoutRv[T]
     main_task: typing.Optional[asyncio.Task] = None
     exception_callback: TimerCallbackT[T]
     cancel_callback: TimerCallbackT[T]
+    last_result: typing.Optional[T] = None
+    last_tick_at: typing.Optional[float] = None  # time.monotonic() of last tick
 
     def __init__(
         self,
@@ -99,6 +103,11 @@ class Timer(typing.Generic[T]):
         cancel_cb: TimerCallbackT[T] = _noop_cb,
         cancel_aws: typing.Union[typing.Sequence[typing.Awaitable], None] = None,
         start: bool = False,
+        *,
+        mode: PacemakerMode = "fixed_delay",
+        initial_delay: float = 0.0,
+        jitter: float = 0.0,
+        name: typing.Optional[str] = None,
     ):
         """Create the Timer object.
 
@@ -123,9 +132,24 @@ class Timer(typing.Generic[T]):
                 being constructed with them.
             `start` - if True, calls `start()` immediately. Requires
                 a running event loop.
+            `mode` - "fixed_delay" (default; next tick fires `delay`
+                after the previous one finishes) or "fixed_rate" (ticks
+                are anchored to a wall-clock schedule; missed slots are
+                skipped with a warning log).
+            `initial_delay` - seconds to wait before the first tick.
+                Default 0 (first tick fires immediately on start).
+            `jitter` - fraction in [0, 1]. Each per-tick sleep is
+                perturbed by ±jitter × sleep to avoid thundering-herd.
+            `name` - optional identifier used in the timer's repr and
+                in the per-timer logger. Useful when an app runs many
+                timers concurrently.
         """
-        self.pacemaker = self._create_pacemaker(delay)
-        self.target_caller = async_timer.target_caller.Caller(target)
+        self.name = name
+        self._logger = logger.getChild(name) if name else logger
+        self.pacemaker = self._create_pacemaker(
+            delay, mode=mode, initial_delay=initial_delay, jitter=jitter
+        )
+        self.target_caller = async_timer.target_caller.Caller[T](target)
         self.result_fanout = FanoutRv()
         self.exception_callback = exc_cb
         self.cancel_callback = cancel_cb
@@ -142,9 +166,18 @@ class Timer(typing.Generic[T]):
         if start:
             self.start()
 
-    def _create_pacemaker(self, delay: float) -> "async_timer.pacemaker.TimerPacemaker":
+    def _create_pacemaker(
+        self,
+        delay: float,
+        *,
+        mode: PacemakerMode = "fixed_delay",
+        initial_delay: float = 0.0,
+        jitter: float = 0.0,
+    ) -> "async_timer.pacemaker.TimerPacemaker":
         """Hook for subclasses that need a different pacemaker class."""
-        return async_timer.pacemaker.TimerPacemaker(delay)
+        return async_timer.pacemaker.TimerPacemaker(
+            delay, mode=mode, initial_delay=initial_delay, jitter=jitter
+        )
 
     @property
     def delay(self) -> float:
@@ -270,12 +303,32 @@ class Timer(typing.Generic[T]):
                     self.exception_callback(self, self.target_caller.target)
                     break
                 else:
+                    self.last_result = rv
+                    self.last_tick_at = time.monotonic()
                     self.result_fanout.send_result(rv)
                 self.hit_count += 1
         finally:
             # Main loop finished - cancel all watchers
             self.result_fanout.cancel()
             self.cancel_callback(self, self.target_caller.target)
+
+    async def trigger(self) -> T:
+        """Fire the target now, then resume the regular schedule.
+
+        Returns the result of the triggered tick. Useful for "refresh
+        on demand, then go back to the periodic schedule" patterns.
+
+        Raises `RuntimeError` if the timer is not currently running,
+        or `asyncio.CancelledError` if the timer stops while the
+        triggered tick is in flight.
+        """
+        if not self.is_running():
+            raise RuntimeError("Cannot trigger a Timer that is not running")
+        # Register the join() waiter *before* nudging the pacemaker, so
+        # we don't miss the resulting tick.
+        wait = asyncio.ensure_future(self.result_fanout.wait())
+        self.pacemaker.trigger()
+        return await wait
 
     async def cancel(self):
         """Unschedule the timer.
@@ -310,8 +363,10 @@ class Timer(typing.Generic[T]):
         return await self.cancel()
 
     def __repr__(self) -> str:
+        name_part = f" name={self.name!r}" if self.name else ""
         return (
-            f"<{self.__class__.__name__} target={self.target_caller.target!r}"
+            f"<{self.__class__.__name__}{name_part}"
+            f" target={self.target_caller.target!r}"
             f" delay={self.delay!r}"
             f" hit_count={self.hit_count!r}"
             f" exception_callback={self.exception_callback!r}"

@@ -108,6 +108,52 @@ async def test_mock_pacemaker_stops_during_sleep_await():
 
 
 @pytest.mark.asyncio
+async def test_mock_pacemaker_honors_trigger_before_first_check():
+    """Each post-await cancel check in MockPacemaker._try_wait also
+    honors the trigger event, returning early when set."""
+    pm = MockPacemaker(delay=10_000)
+    pm.trigger()  # set before any iteration runs
+    aiter = pm.__aiter__()
+    await aiter.__anext__()  # first tick is free regardless
+    await aiter.__anext__()  # second tick: trigger consumed at the *first* check
+    # The mock's sleep should not have been awaited on the triggered tick.
+    assert pm.sleep.await_count == 0
+    pm.stop()
+
+
+@pytest.mark.asyncio
+async def test_mock_pacemaker_trigger_after_first_sleep_check():
+    """Cover the trigger-event check that runs after the inter-loop sleep."""
+    pm = MockPacemaker(delay=10_000)
+    aiter = pm.__aiter__()
+    await aiter.__anext__()
+
+    async def _trigger_mid_sleep():
+        # Wait for the pacemaker to be in the first await before triggering.
+        await asyncio.sleep(0)
+        pm.trigger()
+
+    asyncio.get_running_loop().create_task(_trigger_mid_sleep())
+    await aiter.__anext__()
+    pm.stop()
+
+
+@pytest.mark.asyncio
+async def test_mock_pacemaker_trigger_after_mocked_sleep():
+    """Cover the third trigger-event check (after the mocked sleep)."""
+    pm = MockPacemaker(delay=10_000)
+    aiter = pm.__aiter__()
+    await aiter.__anext__()
+
+    async def _trigger_in_sleep(_delay):
+        pm.trigger()
+
+    pm.sleep.side_effect = _trigger_in_sleep
+    await aiter.__anext__()
+    pm.stop()
+
+
+@pytest.mark.asyncio
 async def test_mock_pacemaker_is_subclass_of_real():
     """Hook-based construction means MockTimer.pacemaker is the only one ever
     created — no orphan TimerPacemaker hanging around with stop-callbacks."""

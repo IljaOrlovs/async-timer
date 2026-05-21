@@ -25,7 +25,14 @@ This package is particularly useful for tasks like automatically updating caches
 * **Keep Getting Updates**: You can use it in a loop to keep getting updates every time the timer goes off.
 * **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor argument). `await cancel()` waits for cleanup to complete before returning, and is safe to call from inside the target or its callbacks.
 * **Restartable**: Calling `start()` after `cancel()` resumes the timer with fresh pacemaker, fanout, and target-caller state (generator targets get a fresh generator). Restart is rejected with a clear error if the original construction used `cancel_aws`, since those awaitables are single-shot.
-* **Test friendly**: The package provides an additional `mock_async_timer.MockTimer` class with mocked sleep function to aid in your testing
+* **Scheduling modes**: Choose between `fixed_delay` (next tick fires `delay` seconds *after* the previous tick finishes) and `fixed_rate` (ticks anchored to a wall-clock schedule; missed slots are skipped and logged).
+* **Initial delay and jitter**: `initial_delay=N` lets you defer the first tick; `jitter=0.1` perturbs each per-tick sleep by ±10 % to avoid thundering-herd in distributed deployments.
+* **Trigger on demand**: `await timer.trigger()` fires the target immediately and resumes the regular schedule; great for "refresh on user request, then go back to periodic" patterns.
+* **Last value cache**: `timer.last_result` / `timer.last_tick_at` let consumers grab the most recent value without blocking on `join()`.
+* **Decorator API**: `@async_timer.every(5)` wraps a function into a `Timer` in one line; the undecorated function is preserved on `.func` for direct invocation in tests.
+* **Timer groups**: `async with async_timer.TimerGroup(): ...` starts and cancels a collection of timers together.
+* **Named timers**: `name="db_refresh"` shows up in `repr()` and scopes the timer's logger, so multi-timer apps have readable logs.
+* **Test friendly**: The package provides an additional `mock_async_timer.MockTimer` class with mocked sleep function to aid in your testing.
 
 ## Requirements
 
@@ -107,4 +114,55 @@ async def main():
             print(f"{time_rv=}")  # Prints current time every 14 seconds
 
 asyncio.run(main())
+```
+
+### Decorator API
+
+```python
+import async_timer
+
+@async_timer.every(5, mode="fixed_rate", name="db_refresh")
+async def refresh_db():
+    ...
+
+# In tests, the undecorated function is directly callable:
+await refresh_db.func()
+
+# In production, start/cancel like any other Timer:
+async def main():
+    refresh_db.start()
+    await refresh_db.join()
+    await refresh_db.cancel()
+```
+
+### TimerGroup
+
+```python
+import async_timer
+
+async def lifespan():
+    async with async_timer.TimerGroup() as group:
+        group.add(async_timer.Timer(5, target=refresh_db))
+        group.add(async_timer.Timer(60, target=prune_cache))
+        yield  # both timers running; both cancelled on exit
+```
+
+### Trigger on demand
+
+```python
+async def handle_force_refresh(timer):
+    # Fire the target *now* and resume the periodic schedule.
+    return await timer.trigger()
+```
+
+### Read last value without blocking
+
+```python
+@async_timer.every(5)
+async def refresh_db():
+    return await db.fetch()
+
+# Elsewhere in the app:
+def get_cached_value():
+    return refresh_db.last_result  # `None` until the first tick fires
 ```

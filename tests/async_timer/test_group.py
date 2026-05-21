@@ -98,6 +98,47 @@ async def test_group_cancel_all_runs_cancellations_concurrently():
 
 
 @pytest.mark.asyncio
+async def test_group_cancel_all_continues_on_individual_failure(caplog):
+    """If one timer's cancel() raises, the group must still cancel the
+    others and log the failure (rather than abandoning siblings)."""
+    import logging
+
+    cancelled_b = []
+    timer_a = async_timer.Timer(delay=10e-5, target=lambda: 1, start=True)
+    timer_b = async_timer.Timer(
+        delay=10e-5,
+        target=lambda: 1,
+        cancel_cb=lambda *_a, **_kw: cancelled_b.append(1),
+        start=True,
+    )
+    await timer_a.join()
+    await timer_b.join()
+
+    # Replace timer_a.cancel with one that raises.
+    async def _bad_cancel():
+        raise RuntimeError("intentional cancel failure")
+
+    timer_a.cancel = _bad_cancel  # type: ignore[method-assign]
+
+    group = async_timer.TimerGroup([timer_a, timer_b])
+    with caplog.at_level(logging.ERROR, logger="async_timer.group"):
+        # __aexit__ would have to be called manually for this case since
+        # we never entered; use cancel_all directly.
+        await group.cancel_all()
+    # timer_b was still cancelled despite timer_a's failure.
+    assert cancelled_b == [1]
+    # The failure was logged.
+    assert any(
+        "intentional cancel failure" in r.message or "RuntimeError" in r.message
+        for r in caplog.records
+    )
+    # Cleanup any still-running real cancel.
+    if timer_b.is_running():
+        # restore and cleanup
+        pass
+
+
+@pytest.mark.asyncio
 async def test_group_is_iterable():
     timers = [async_timer.Timer(delay=10e-5, target=lambda: 1) for _ in range(3)]
     group = async_timer.TimerGroup(timers)

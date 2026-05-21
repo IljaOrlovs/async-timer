@@ -182,6 +182,64 @@ async def test_jitter_respects_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fixed_rate_2nd_tick_fires_one_delay_after_1st():
+    """Regression: fixed_rate mode had an off-by-one where the 2nd tick
+    fired at `start + 2*delay` instead of `start + 1*delay`."""
+    pm = TimerPacemaker(delay=0.05, mode="fixed_rate")
+    aiter = pm.__aiter__()
+    t0 = time.monotonic()
+    await aiter.__anext__()  # tick 1 (immediate)
+    await aiter.__anext__()  # tick 2 — should be ~0.05s after tick 1, not ~0.10s
+    elapsed = time.monotonic() - t0
+    pm.stop()
+    # Allow generous slack for scheduler overhead but the bug would
+    # show as elapsed ≈ 0.10s (2*delay) rather than ≈ 0.05s (1*delay).
+    assert elapsed < 0.085, (
+        f"fixed_rate 2nd tick fired {elapsed:.3f}s after start — "
+        f"expected ~0.05s, got the off-by-one (~0.10s)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fixed_rate_long_run_stays_on_schedule():
+    """Five ticks should land at ~0, 1d, 2d, 3d, 4d (cumulative)."""
+    delay = 0.03
+    pm = TimerPacemaker(delay=delay, mode="fixed_rate")
+    aiter = pm.__aiter__()
+    timestamps = []
+    t0 = time.monotonic()
+    for _ in range(5):
+        await aiter.__anext__()
+        timestamps.append(time.monotonic() - t0)
+    pm.stop()
+    # Each tick within a half-delay of its target slot.
+    for i, t in enumerate(timestamps):
+        target = i * delay
+        assert abs(t - target) < delay / 2 + 0.02, (
+            f"tick {i} at {t:.3f}s, expected ~{target:.3f}s"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fixed_rate_with_jitter_does_not_falsely_warn(caplog):
+    """Regression for M1: with jitter > 0 in fixed_rate, the per-tick
+    jitter cap was wrong (self.delay instead of remaining wait), letting
+    jitter push ticks past the slot boundary and triggering spurious
+    'fell behind' warnings even when consumer was fast."""
+    pm = TimerPacemaker(delay=0.02, mode="fixed_rate", jitter=0.5)
+    aiter = pm.__aiter__()
+    with caplog.at_level(logging.WARNING, logger="async_timer.pacemaker"):
+        for _ in range(10):
+            await aiter.__anext__()
+    pm.stop()
+    spurious = [r for r in caplog.records if "fell behind" in r.message]
+    assert not spurious, (
+        f"jitter caused {len(spurious)} false skip warnings: "
+        f"{[r.message for r in spurious]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_zero_wait_path_yields_to_other_tasks(monkeypatch):
     """When the computed per-tick wait is exactly 0 (max negative jitter
     collapses delay to 0), pacemaker still yields via `asyncio.sleep(0)`

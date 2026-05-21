@@ -12,10 +12,12 @@ Example
 """
 
 import asyncio
+import logging
 import typing
 
 from .timer import Timer
 
+logger = logging.getLogger(__name__)
 T = typing.TypeVar("T", bound=Timer)
 
 
@@ -71,10 +73,23 @@ class TimerGroup:
 
     async def cancel_all(self):
         """Cancel every timer in the group concurrently and await
-        cleanup of all of them."""
+        cleanup of all of them.
+
+        Exceptions raised by any individual `cancel()` are caught and
+        logged so that a failure in one timer's shutdown doesn't leave
+        sibling timers half-cancelled.
+        """
         if not self.timers:
             return
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(t.cancel() for t in self.timers),
-            return_exceptions=False,
+            return_exceptions=True,
         )
+        for timer, result in zip(self.timers, results):
+            if isinstance(result, BaseException):
+                logger.exception(
+                    "TimerGroup: cancelling %r raised %s",
+                    timer,
+                    type(result).__name__,
+                    exc_info=result,
+                )

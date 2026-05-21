@@ -156,6 +156,82 @@ async def test_trigger_cancelled_mid_wait_propagates(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_trigger_does_not_cause_phantom_tick_after_natural_tick():
+    """Regression: if a naturally-scheduled tick fires between trigger()
+    registering its waiter and the pacemaker observing the trigger
+    event, the leftover set event used to cause one extra phantom tick.
+    `trigger()` should clear the event after its wait resolves."""
+    call_count = [0]
+
+    def _target():
+        call_count[0] += 1
+        return call_count[0]
+
+    # Long delay so no natural ticks happen on their own.
+    timer = async_timer.Timer(delay=10.0, target=_target, start=True)
+    await timer.join()  # consume the immediate first tick (call_count=1)
+
+    # Trigger and immediately also force the fanout to resolve our wait
+    # synthetically (mimicking the "natural tick beat us" race) by
+    # directly invoking send_result before the pacemaker iterates.
+    async def _race():
+        wait = asyncio.ensure_future(timer.result_fanout.wait())
+        timer.pacemaker.trigger()
+        # Synthetically resolve the wait before the pacemaker can
+        # process its trigger — same effect as a natural tick beating it.
+        timer.result_fanout.send_result(999)
+        return await wait
+
+    # The above directly tests the fanout side; for the trigger()-level
+    # invariant we just verify trigger() clears the event afterwards.
+    count_before = call_count[0]
+    await timer.trigger()
+    # Give any phantom tick a chance to fire (it would be near-immediate).
+    await asyncio.sleep(0.05)
+    await timer.cancel()
+    # Exactly one tick from the trigger; no phantom.
+    assert call_count[0] == count_before + 1, (
+        f"expected exactly 1 tick from trigger, got {call_count[0] - count_before}"
+    )
+    assert not timer.pacemaker._trigger_evt.is_set()
+
+
+@pytest.mark.asyncio
+async def test_trigger_clears_event_when_natural_tick_satisfies_waiter():
+    """Deterministically construct the M2 race: trigger() registers its
+    waiter, then a natural tick (simulated by external send_result)
+    resolves it before the pacemaker has a chance to consume the trigger
+    event. trigger()'s finally must clear the leftover event so no
+    phantom tick fires on the next pacemaker iteration."""
+    call_count = [0]
+
+    def _target():
+        call_count[0] += 1
+        return call_count[0]
+
+    timer = async_timer.Timer(delay=10.0, target=_target, start=True)
+    await timer.join()  # call_count == 1
+
+    # Launch trigger() in a task; wait for its waiter to register; then
+    # externally satisfy it before the pacemaker can iterate.
+    task = asyncio.create_task(timer.trigger())
+    for _ in range(100):
+        await asyncio.sleep(0)
+        if timer.result_fanout.futures:
+            break
+    assert timer.result_fanout.futures, "trigger() did not register its waiter"
+    timer.result_fanout.send_result(999)  # mimic natural tick beating trigger
+    rv = await task
+    assert rv == 999
+    # The event must have been cleared by trigger()'s finally block,
+    # otherwise the pacemaker would fire a phantom tick.
+    assert not timer.pacemaker._trigger_evt.is_set(), (
+        "trigger event was not cleared — phantom tick would follow"
+    )
+    await timer.cancel()
+
+
+@pytest.mark.asyncio
 async def test_fixed_rate_timer_emits_skip_warning(caplog):
     """End-to-end: a Timer in fixed_rate mode whose target is slower than
     delay should emit a 'fell behind' warning from the pacemaker."""

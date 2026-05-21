@@ -328,7 +328,15 @@ class Timer(typing.Generic[T]):
         # we don't miss the resulting tick.
         wait = asyncio.ensure_future(self.result_fanout.wait())
         self.pacemaker.trigger()
-        return await wait
+        try:
+            return await wait
+        finally:
+            # If a naturally-scheduled tick fired between our waiter
+            # registration and the pacemaker noticing the trigger, our
+            # `wait` is already resolved but the trigger event is still
+            # set — clear it so the pacemaker doesn't fire a phantom
+            # extra tick on its next iteration.
+            self.pacemaker._trigger_evt.clear()
 
     async def cancel(self):
         """Unschedule the timer.

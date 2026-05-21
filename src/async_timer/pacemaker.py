@@ -43,7 +43,10 @@ class TimerPacemaker:
     _cancel_evt: asyncio.Event
     _trigger_evt: asyncio.Event
     _start_time: typing.Optional[float] = None  # wall-clock anchor for fixed_rate
-    _tick_number: int = 0  # how many ticks (incl. first) have been yielded
+    # 0-indexed position of the most recently emitted tick. Tick N is
+    # scheduled to fire at _start_time + N*delay (so tick 0 = the very
+    # first emission, at _start_time exactly).
+    _tick_number: int = 0
 
     def __init__(
         self,
@@ -145,16 +148,16 @@ class TimerPacemaker:
                     self.stop()
                     raise
             # Anchor the wall-clock schedule at the moment of the
-            # first emitted tick.
+            # first emitted tick (tick 0).
             self._start_time = time.monotonic()
-            self._tick_number = 1
+            self._tick_number = 0
             return None
 
-        self._tick_number += 1
         if self.mode == "fixed_rate":
             wait_for = self._compute_fixed_rate_wait()
         else:
             wait_for = self._apply_jitter(self.delay)
+            self._tick_number += 1
 
         if wait_for <= 0:
             # Triggered tick or back-to-back in fixed_rate; still yield
@@ -174,17 +177,19 @@ class TimerPacemaker:
         If we've already missed the next slot (typically because the
         consumer's processing of the previous tick took longer than
         `delay`), log a warning and advance `_tick_number` past every
-        slot that is in the past, so the *next* yielded tick lines up
+        slot that is in the past, so the *next* emitted tick lines up
         with a still-future slot. Returns the wait until that slot.
         """
         assert self._start_time is not None
         now = time.monotonic()
-        next_tick_at = self._start_time + self._tick_number * self.delay
+        # Next tick to emit is index `_tick_number + 1`.
+        target_index = self._tick_number + 1
+        next_tick_at = self._start_time + target_index * self.delay
         skipped = 0
         while next_tick_at <= now:
             skipped += 1
-            self._tick_number += 1
-            next_tick_at = self._start_time + self._tick_number * self.delay
+            target_index += 1
+            next_tick_at = self._start_time + target_index * self.delay
         if skipped:
             logger.warning(
                 "fixed_rate pacemaker fell behind: skipping %d tick(s) "
@@ -193,10 +198,13 @@ class TimerPacemaker:
                 self.delay,
                 now - (next_tick_at - skipped * self.delay),
             )
+        self._tick_number = target_index
         wait_for = next_tick_at - now
-        # Apply jitter within the slot but never push past the next slot
-        # boundary (that would let jitter cause an additional skip).
-        return self._apply_jitter(wait_for, cap=self.delay)
+        # Apply jitter within the *remaining* wait (not the full delay).
+        # Capping at `wait_for` ensures jitter never pushes the tick
+        # past the scheduled slot boundary, which would falsely register
+        # as "fell behind" on the next iteration.
+        return self._apply_jitter(wait_for, cap=wait_for)
 
     def _apply_jitter(self, base: float, cap: typing.Optional[float] = None) -> float:
         if self.jitter == 0:

@@ -62,9 +62,23 @@ class TimerGroup:
 
     async def __aenter__(self) -> "TimerGroup":
         self._active = True
-        for t in self.timers:
-            if not t.is_running():
-                t.start()
+        started: typing.List[Timer] = []
+        try:
+            for t in self.timers:
+                if not t.is_running():
+                    t.start()
+                    started.append(t)
+        except BaseException:
+            # Partial-start failure: cancel the timers we did start so
+            # they don't leak; then re-raise so the caller sees the
+            # original failure. `__aexit__` won't be called when
+            # `__aenter__` raises.
+            self._active = False
+            await asyncio.gather(
+                *(t.cancel() for t in started),
+                return_exceptions=True,
+            )
+            raise
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

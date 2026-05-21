@@ -116,8 +116,10 @@ class TimerPacemaker:
         """Wake any in-progress sleep so the next tick fires immediately.
 
         Has no effect if the pacemaker is not currently sleeping. In
-        `fixed_rate` mode, the wall-clock schedule is realigned to the
-        moment of the triggered tick.
+        `fixed_rate` mode, the wall-clock schedule is re-anchored to
+        the moment of the triggered tick, so subsequent ticks fire one
+        `delay` apart from the trigger rather than catching up to the
+        original schedule.
         """
         self._trigger_evt.set()
 
@@ -165,10 +167,17 @@ class TimerPacemaker:
             await asyncio.sleep(0)
             return None
         try:
-            await self._try_wait(wait_for)
+            was_triggered = await self._try_wait(wait_for)
         except StopAsyncIteration:
             self.stop()
             raise
+        if was_triggered and self.mode == "fixed_rate":
+            # Re-anchor the fixed-rate schedule to the moment of this
+            # triggered tick. Without this, the next iteration would
+            # compute its slot from the original anchor and either fire
+            # too soon (catching up) or warn about "falling behind".
+            self._start_time = time.monotonic()
+            self._tick_number = 0
         return None
 
     def _compute_fixed_rate_wait(self) -> float:
@@ -217,11 +226,12 @@ class TimerPacemaker:
             out = cap
         return out
 
-    async def _try_wait(self, delay: float):
+    async def _try_wait(self, delay: float) -> bool:
         """Wait for `delay`, or until cancel/trigger fires.
 
         Raises `StopAsyncIteration` if cancel was signalled.
-        Returns normally on timeout or on trigger.
+        Returns `True` if a trigger cut the wait short, `False` on a
+        normal timeout.
         """
         cancel_task = asyncio.ensure_future(self._cancel_evt.wait())
         trigger_task = asyncio.ensure_future(self._trigger_evt.wait())
@@ -240,4 +250,5 @@ class TimerPacemaker:
         if self._trigger_evt.is_set():
             # Consume the trigger so the next sleep is normal again.
             self._trigger_evt.clear()
-        return None
+            return True
+        return False

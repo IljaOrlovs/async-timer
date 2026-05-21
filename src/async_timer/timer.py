@@ -76,8 +76,15 @@ def _noop_cb(*_, **__):
 
 
 def _default_main_loop_exception_callback(*_, **__):
+    """Default exc_cb: log the in-flight target exception.
+
+    Does NOT re-raise. Re-raising would propagate the exception out of
+    the timer task into the asyncio loop, which then emits a duplicate
+    "Task exception was never retrieved" warning. The loop's `finally`
+    has already cleaned up by the time exc_cb runs, so the task ends
+    naturally regardless.
+    """
     logger.exception("An unexpected exception in the timer loop.")
-    raise
 
 
 class Timer(typing.Generic[T]):
@@ -119,8 +126,9 @@ class Timer(typing.Generic[T]):
                 fires immediately on `start()`; subsequent ticks are
                 spaced by `delay`.
             `exc_cb` - callback the timer will call if `target` raises.
-                Default re-raises the exception inside the timer task
-                and logs it; the task then ends and `cancel_cb` fires.
+                Default logs the exception via the per-timer logger.
+                After exc_cb runs, the timer task ends and `cancel_cb`
+                fires.
             `cancel_cb` - callback the timer will call when the timer
                 task ends for any reason (explicit cancel, target
                 exhaustion via StopIteration, exception, or
@@ -155,14 +163,18 @@ class Timer(typing.Generic[T]):
         self.cancel_callback = cancel_cb
         # cancel_aws are single-shot awaitables — track whether the user
         # passed any so we can fail loudly on restart instead of silently
-        # losing them.
+        # losing them. Stored as a pending list and registered with the
+        # pacemaker on first start() (not in __init__), so module-scope
+        # use (e.g. `@every(..., cancel_aws=[...])`) works without a
+        # running event loop at decoration time.
+        self._pending_cancel_aws: typing.Optional[typing.List[typing.Awaitable]] = (
+            list(cancel_aws) if cancel_aws else None
+        )
         self._had_cancel_aws: bool = bool(cancel_aws)
         # Separate from main_task (which `cancel()` clears) — survives
         # across cancel/restart cycles so start() can detect "this is a
         # restart, not the first run".
         self._has_been_started: bool = False
-        if cancel_aws:
-            self.pacemaker.stop_on(list(cancel_aws))
         if start:
             self.start()
 
@@ -209,6 +221,11 @@ class Timer(typing.Generic[T]):
         self.result_fanout = FanoutRv()
         if is_restart:
             self.target_caller.reset()
+        # Now that we know a running loop is available, arm any deferred
+        # cancel_aws awaitables registered at construction time.
+        if self._pending_cancel_aws is not None:
+            self.pacemaker.stop_on(self._pending_cancel_aws)
+            self._pending_cancel_aws = None
         loop = asyncio.get_running_loop()  # there MUST be a running loop
         self.main_task = loop.create_task(self._loop_callback_routine())
         self._has_been_started = True

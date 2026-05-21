@@ -21,26 +21,27 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
         super().__init__(*args, **kwargs)
         self.sleep = unittest.mock.AsyncMock(name="mock-timer-sleep")
 
-    async def _try_wait(self, delay: float):
+    async def _try_wait(self, delay: float) -> bool:
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
         if self._trigger_evt.is_set():
             self._trigger_evt.clear()
-            return
+            return True
 
         await self._sleep_until_next_loop_iter()
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
         if self._trigger_evt.is_set():
             self._trigger_evt.clear()
-            return
+            return True
 
         await self.sleep(delay)
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
         if self._trigger_evt.is_set():
             self._trigger_evt.clear()
-            return
+            return True
+        return False
 
     async def _sleep_until_next_loop_iter(self):
         """Awaiting this function will release on the next async loop iteration"""

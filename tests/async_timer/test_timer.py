@@ -251,6 +251,45 @@ class TestAsyncFunc:
                 await timer.wait(hit_count=42, timeout=0.5)
 
     @pytest.mark.asyncio
+    async def test_idle_wait_with_timeout_returns_last_rv_does_not_raise(
+        self, count_fn
+    ):
+        """Documented behaviour: `wait(timeout=T)` with no hit_count/hits
+        is an idle wait bounded by T — it returns the last seen tick
+        result rather than raising TimeoutError.
+
+        Callers that want a TimeoutError instead should use hits=1 or
+        wrap with asyncio.wait_for(timer.wait(), timeout=T)."""
+        async with async_timer.Timer(10e-15, target=count_fn) as timer:
+            # No hit_count / hits — pure idle wait with a 0.1s bound.
+            rv = await timer.wait(timeout=0.1)
+        # We got a value (timer was ticking fast), not a TimeoutError.
+        assert rv is not None
+
+    @pytest.mark.asyncio
+    async def test_idle_wait_with_timeout_on_slow_timer_returns_none(self):
+        """With a slow timer that never ticks within the timeout window,
+        idle-wait-with-timeout returns None (no last_rv yet) rather
+        than raising."""
+        async with async_timer.Timer(10_000, target=lambda: 42) as timer:
+            await timer.join()  # consume the immediate first tick
+            # Next tick won't fire for 10_000s. Idle-wait with 0.05s
+            # timeout must return cleanly (None, since no tick happened
+            # during the wait window).
+            rv = await timer.wait(timeout=0.05)
+        assert rv is None
+
+    @pytest.mark.asyncio
+    async def test_hits_one_with_timeout_raises_on_slow_timer(self):
+        """Counterpart to the above: `hits=1, timeout=T` IS a "fail if
+        no tick" call and raises TimeoutError. This is the pattern
+        callers should use when they want to detect "timer is stuck"."""
+        async with async_timer.Timer(10_000, target=lambda: 42) as timer:
+            await timer.join()  # first tick
+            with pytest.raises(asyncio.TimeoutError):
+                await timer.wait(hits=1, timeout=0.05)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "initial_hits, wait_for_delta, exp_rv",
         (

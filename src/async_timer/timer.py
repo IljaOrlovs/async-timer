@@ -261,18 +261,36 @@ class Timer(typing.Generic[T]):
         hits: typing.Optional[int] = None,
         timeout: typing.Optional[float] = None,
     ) -> typing.Optional[T]:
-        """
-        Wait for the timer to reach certain hit count
-            or wait for a certain number of hits.
+        """Wait for a hit-count condition, or wait until the timer stops.
 
-        Can raise `asyncio.TimeoutError` if there was a wait condition
-            and timeout specified and the wait did not manage to hit
-            the condition in time
+        Parameters:
+            `hit_count` - wait until `timer.hit_count` reaches this
+                absolute value.
+            `hits` - wait for this many *additional* ticks beyond the
+                current `hit_count`.
+            `timeout` - upper bound on wall-clock seconds to wait.
 
-        Waits for the timer to stop if neither parameter is present.
+        Behaviour matrix (`hit_count` and `hits` are mutually exclusive;
+        `hit_count` takes precedence if both are passed):
 
-        Returns the last generated result IF there was a need to wait.
-        Returns `None` otherwise.
+        ┌─────────────────────────┬──────────────┬───────────────────────────────┐
+        │ Wait condition          │ Timeout      │ Outcome                       │
+        ├─────────────────────────┼──────────────┼───────────────────────────────┤
+        │ hit_count or hits set   │ not reached  │ returns last tick result      │
+        │ hit_count or hits set   │ exceeded     │ raises asyncio.TimeoutError   │
+        │ neither set (idle wait) │ not provided │ blocks until timer stops      │
+        │ neither set (idle wait) │ provided     │ returns last seen result      │
+        │                         │              │ after timeout (NOT raised)    │
+        └─────────────────────────┴──────────────┴───────────────────────────────┘
+
+        The "idle wait + timeout returns last_rv" mode is deliberate —
+        it gives callers a "wait for the timer to settle, but don't
+        hang forever" pattern without having to handle TimeoutError.
+        If you want a TimeoutError on idle wait, pass `hits=1` instead
+        (or use `await asyncio.wait_for(timer.wait(), timeout=T)`).
+
+        Returns `None` if no ticks happened during the wait (e.g. a
+        zero-hit condition was satisfied immediately).
         """
         start_time = time.monotonic()
         timeout_left = timeout

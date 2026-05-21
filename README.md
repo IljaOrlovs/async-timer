@@ -21,7 +21,7 @@ This package is particularly useful for tasks like automatically updating caches
   * Asynchronous functions
   * Synchronous generators
   * Asynchronous generators
-* **Wait for the Next Tick**: You can set it up so your program waits for the timer to do its thing, and then continues.
+* **Wait for the Next Tick**: You can set it up so your program waits for the timer to do its thing, and then continues. `await timer.wait(hits=N, timeout=T)` raises on timeout when waiting for a specific number of ticks; `await timer.wait(timeout=T)` (no hit condition) is a bounded *idle* wait that returns the last seen value without raising — useful for "let the timer settle, but don't hang forever" patterns.
 * **Keep Getting Updates**: You can use it in a loop to keep getting updates every time the timer goes off.
 * **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor argument). `await cancel()` waits for cleanup to complete before returning, and is safe to call from inside the target or its callbacks.
 * **Restartable**: Calling `start()` after `cancel()` resumes the timer with fresh pacemaker, fanout, and target-caller state (generator targets get a fresh generator). Restart is rejected with a clear error if the original construction used `cancel_aws`, since those awaitables are single-shot.

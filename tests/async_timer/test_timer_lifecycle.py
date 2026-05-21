@@ -161,6 +161,38 @@ async def test_cancel_awaitable_raising_stops_timer_and_logs(caplog):
 
 
 @pytest.mark.asyncio
+async def test_target_exception_propagates_to_late_arriving_waiter():
+    """Regression: when target raises while no consumer is registered
+    in the fanout, the exception used to be silently lost — the next
+    consumer would see a generic CancelledError and the async-for
+    loop would exit cleanly. send_exception() is now sticky: it closes
+    the fanout with the exception so late-arriving waiters still see
+    it."""
+
+    def _target():
+        raise RuntimeError("target boom")
+
+    timer = async_timer.Timer(
+        delay=10e-5,
+        target=_target,
+        exc_cb=lambda *_a, **_kw: None,  # swallow at the cb
+        start=True,
+    )
+    # Give the loop time to run target, raise, and end — *without* us
+    # ever calling join() during the loop's lifetime. This is the race
+    # the bug depended on: no waiter registered when send_exception fires.
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if not timer.is_running():
+            break
+    # Now register a wait — we should see the stored exception, not a
+    # generic CancelledError.
+    with pytest.raises(RuntimeError, match="target boom"):
+        await timer.result_fanout.wait()
+    await timer.cancel()
+
+
+@pytest.mark.asyncio
 async def test_self_cancel_from_inside_target_does_not_deadlock():
     """An async target that calls `await timer.cancel()` on itself must
     not deadlock — `cancel()` skips `await task` when called from the

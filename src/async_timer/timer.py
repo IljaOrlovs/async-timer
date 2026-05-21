@@ -34,18 +34,29 @@ class FanoutRv(typing.Generic[T]):
     `cancel` on futures are non-blocking and list append/clear are atomic
     in CPython. Only `wait()` is a coroutine — it returns a future that
     callers await for the next posted result.
+
+    `send_exception()` is *sticky*: it closes the fanout *with* the
+    exception so any subsequent `wait()` (e.g. from a consumer that
+    wasn't yet registered when the exception was sent) still sees it
+    instead of a generic CancelledError. Without this, the async-for
+    consumer pattern would silently swallow target exceptions raised
+    while the consumer was doing other work.
     """
 
     futures: typing.List[asyncio.Future]
     _closed: bool
+    _close_exc: typing.Optional[BaseException]
 
     def __init__(self):
         self.futures = []
         self._closed = False
+        self._close_exc = None
 
     async def wait(self) -> T:
         """Wait for result to be posted."""
         if self._closed:
+            if self._close_exc is not None:
+                raise self._close_exc
             raise asyncio.CancelledError("Fanout is closed")
         future = asyncio.get_running_loop().create_future()
         self.futures.append(future)
@@ -62,8 +73,16 @@ class FanoutRv(typing.Generic[T]):
             if not future.done():
                 future.set_exception(exc)
         self.futures.clear()
+        # Sticky: close the fanout so late-arriving waiters also see
+        # the exception rather than a generic CancelledError.
+        self._closed = True
+        self._close_exc = exc
 
     def cancel(self):
+        if self._closed:
+            # Already closed — preserve any existing exception state
+            # (e.g. set by an earlier send_exception).
+            return
         self._closed = True
         for future in self.futures:
             if not future.done():

@@ -1,20 +1,10 @@
-"""Decorator-style API for building Timers.
+"""`@every(delay)` decorator that wraps a function into a Timer.
 
-Example
--------
+@async_timer.every(5)
+async def refresh_db(): ...
 
-    @async_timer.every(5)
-    async def refresh_db():
-        ...
-
-    # `refresh_db` is now a `Timer` instance. The original callable is
-    # available as `refresh_db.func` for direct invocation in tests:
-    await refresh_db.func()
-
-    # In an async context, start/cancel like any other Timer:
-    refresh_db.start()
-    await refresh_db.join()
-    await refresh_db.cancel()
+await refresh_db.func()    # call the undecorated fn (handy in tests)
+refresh_db.start(); await refresh_db.join(); await refresh_db.cancel()
 """
 
 import functools
@@ -27,16 +17,14 @@ T = typing.TypeVar("T")
 
 
 class DecoratedTimer(Timer[T]):
-    """A `Timer` produced by `@every(...)` that also keeps a reference
-    to the original undecorated function on `.func`."""
+    """Timer produced by `@every(...)`. Original callable on `.func`."""
 
-    func: typing.Any  # the unwrapped callable, for direct test invocation
+    func: typing.Any  # undecorated callable
 
     def __init__(self, *args, _func, **kwargs):
         super().__init__(*args, **kwargs)
         self.func = _func
-        # Preserve standard introspection attributes from the wrapped
-        # function so tooling (Sphinx, IDEs, etc.) still works.
+        # Carry __name__/__doc__/etc. from the wrapped fn for tooling.
         functools.update_wrapper(
             self,  # type: ignore[arg-type]
             _func,
@@ -55,21 +43,10 @@ def every(
     jitter: float = 0.0,
     name: typing.Optional[str] = None,
 ) -> typing.Callable[[TimerMainTaskT[T]], "DecoratedTimer[T]"]:
-    """Wrap a function into a `Timer` that fires it every `delay` seconds.
+    """Wrap a function into a Timer firing it every `delay` seconds.
 
-    The returned object is a `Timer` instance — call `.start()` from
-    within a running event loop. The original undecorated function is
-    available as `.func` for direct invocation in tests::
-
-        @async_timer.every(5)
-        async def refresh_db():
-            ...
-
-        # In tests, call the underlying function directly:
-        await refresh_db.func()
-
-    All Timer constructor keyword arguments (mode, jitter, etc.) are
-    supported.
+    All Timer kwargs (mode, jitter, etc.) are forwarded. The undecorated
+    function is exposed as `.func` on the returned object.
     """
 
     def _decorator(func: TimerMainTaskT[T]) -> DecoratedTimer[T]:

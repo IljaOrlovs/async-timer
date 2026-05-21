@@ -1,14 +1,9 @@
-"""`TimerGroup` — lifespan helper for managing a set of timers together.
+"""Lifespan helper to start/cancel a set of timers together.
 
-Example
--------
-
-    async with async_timer.TimerGroup() as group:
-        group.add(async_timer.Timer(5, refresh_db))
-        group.add(async_timer.Timer(60, prune_cache))
-        yield  # both timers running
-
-    # Both timers are cancelled by the time we exit the `async with`.
+async with async_timer.TimerGroup() as group:
+    group.add(async_timer.Timer(5, refresh_db))
+    group.add(async_timer.Timer(60, prune_cache))
+    yield  # both running; both cancelled on exit
 """
 
 import asyncio
@@ -22,15 +17,11 @@ T = typing.TypeVar("T", bound=Timer)
 
 
 class TimerGroup:
-    """A collection of `Timer` objects with a shared lifecycle.
+    """Timers with a shared lifecycle.
 
-    Timers added via `add()` before `__aenter__` are started together
-    on context entry. Timers added *while* the group is active are
-    started immediately (if not already running). On `__aexit__`,
-    every timer in the group is cancelled concurrently.
-
-    A `TimerGroup` may be re-entered as long as all its timers support
-    restart (i.e. were not constructed with `cancel_aws`).
+    Timers added before `__aenter__` start on entry; timers added
+    while active start immediately. `__aexit__` cancels all
+    concurrently. Re-entry works if no member uses `cancel_aws`.
     """
 
     timers: typing.List[Timer]
@@ -41,11 +32,7 @@ class TimerGroup:
         self._active = False
 
     def add(self, timer: T) -> T:
-        """Add a timer to the group. Returns the timer for chaining.
-
-        If the group is already active, the timer is started immediately
-        (unless it is already running).
-        """
+        """Add a timer (and start it if the group is active). Returns it."""
         self.timers.append(timer)
         if self._active and not timer.is_running():
             timer.start()
@@ -69,10 +56,8 @@ class TimerGroup:
                     t.start()
                     started.append(t)
         except BaseException:
-            # Partial-start failure: cancel the timers we did start so
-            # they don't leak; then re-raise so the caller sees the
-            # original failure. `__aexit__` won't be called when
-            # `__aenter__` raises.
+            # Partial-start failure: cancel what started, re-raise.
+            # (__aexit__ won't run when __aenter__ raises.)
             self._active = False
             await asyncio.gather(
                 *(t.cancel() for t in started),
@@ -86,13 +71,7 @@ class TimerGroup:
         await self.cancel_all()
 
     async def cancel_all(self):
-        """Cancel every timer in the group concurrently and await
-        cleanup of all of them.
-
-        Exceptions raised by any individual `cancel()` are caught and
-        logged so that a failure in one timer's shutdown doesn't leave
-        sibling timers half-cancelled.
-        """
+        """Cancel all timers concurrently. Individual failures are logged."""
         if not self.timers:
             return
         results = await asyncio.gather(

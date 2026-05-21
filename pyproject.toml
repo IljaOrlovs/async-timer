@@ -3,27 +3,34 @@ name = "async-timer"
 dynamic = ["version"]
 description = "The missing Python async timer."
 authors = [
-    {name = "Ilya O.", email = "vrghost@gmail.com"},
+    {name = "Ilja Orlovs", email = "vrghost@gmail.com"},
 ]
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.9"
-keywords = ["async", "timer"]
+keywords = ["async", "asyncio", "timer", "scheduler", "periodic", "interval"]
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
 ]
 dependencies = []
 
 [project.urls]
+Homepage = "https://github.com/VRGhost/async-timer"
 Source = "https://github.com/VRGhost/async-timer"
+Issues = "https://github.com/VRGhost/async-timer/issues"
+Changelog = "https://github.com/VRGhost/async-timer/releases"
 
 [dependency-groups]
 dev = [
@@ -74,7 +81,7 @@ select = [
     "T20",
     "PTH",
 ]
-ignore = ["N802", "F841"]
+ignore = ["N802"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = [

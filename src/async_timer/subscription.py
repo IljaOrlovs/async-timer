@@ -1,38 +1,16 @@
-"""Per-consumer queue-based tick subscription.
+"""Buffered per-consumer tick stream — `Subscription`.
 
-Complements `Timer`'s built-in `join()` / `wait()` / `async for` API
-(which is single-shot fan-out and may drop intermediate ticks under a
-slow consumer) with a *buffered* stream: each `Subscription` owns its
-own queue, so it sees **every tick from the moment it subscribed**,
-even if consumption is slower than the tick rate.
-
-Usage
------
+Each subscriber owns an `asyncio.Queue` of every tick from
+subscribe-time, so a consumer slower than the tick rate doesn't miss
+ticks (unlike the Timer's single-shot fanout).
 
     async with timer.subscribe() as feed:
         async for value in feed:
-            await slow_work(value)   # never misses a tick
+            await slow_work(value)
 
-`maxsize` controls the underlying queue:
-
-* `maxsize=0` (default): unbounded queue — safe for steady-state
-  consumers that occasionally fall behind; will leak memory if the
-  consumer permanently can't keep up.
-* `maxsize>0`: bounded queue. When full, the *oldest* buffered tick is
-  dropped to make room and a warning is logged on the timer's logger.
-  Use this when "stay current at all costs" beats "deliver every tick".
-
-A `Subscription` is closed by:
-
-* exiting its `async with` block,
-* the underlying `Timer` ending (target raised, target's generator
-  exhausted, or `cancel()` called),
-* calling `subscription.close()` explicitly.
-
-Once closed, iteration ends cleanly with `StopAsyncIteration`. If the
-timer ended because the target raised, that exception is re-raised
-from the subscriber's `__anext__` (so subscribers learn about target
-failures rather than silently exiting).
+`maxsize=0` (default) is unbounded; `maxsize>0` drops oldest + logs
+when full. Closed by `async with` exit, explicit `close()`, or the
+upstream Timer ending. Target exceptions re-raise from `__anext__`.
 """
 
 import asyncio
@@ -44,17 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 class _StreamEnd:
-    """Sentinel pushed into a subscription queue when the upstream timer
-    ends. Distinct from a `None` value so subscriptions over `Timer[None]`
-    still work correctly."""
+    """End-of-stream sentinel (distinct from `None`)."""
 
 
 _STREAM_END: typing.Final = _StreamEnd()
 
 
 class _StreamExc:
-    """Wrapper used to ship an upstream target exception into a
-    subscription queue without confusing it with a value of type T."""
+    """Wraps an upstream exception into a queue item."""
 
     __slots__ = ("exc",)
 
@@ -66,20 +41,15 @@ _QueueItem = typing.Union[T, _StreamEnd, _StreamExc]
 
 
 class Subscription(typing.Generic[T]):
-    """An async-iterable feed of every tick a `Timer` produces while
-    this subscription is open.
-
-    Don't construct directly — use `timer.subscribe(...)`.
-    """
+    """Async-iterable feed of every tick. Use `timer.subscribe(...)`."""
 
     _queue: "asyncio.Queue[_QueueItem[T]]"
     _maxsize: int
     _closed: bool
     _name: typing.Optional[str]
-    # Owning timer's per-subscription cleanup hook, set by Timer.subscribe.
+    # Cleanup hook set by Timer.subscribe; cleared after first invocation.
     _unregister: typing.Optional[typing.Callable[["Subscription[T]"], None]]
-    # Drops counter for observability (incremented when bounded queue is
-    # full and the oldest tick is evicted).
+    # Counts both producer-side (queue-full) and consumer-side (drop_oldest) drops.
     dropped_count: int
 
     def __init__(
@@ -102,16 +72,13 @@ class Subscription(typing.Generic[T]):
     # ------------------------------------------------------------------
 
     def _push_value(self, value: T) -> None:
-        """Push a tick value. If bounded and full, drop the oldest."""
+        """Push a tick. If bounded and full, drop the oldest first."""
         if self._closed:
             return
         if self._maxsize and self._queue.full():
-            # Drop oldest to make room. `get_nowait` is safe because
-            # we're on the loop thread and the queue is non-empty
-            # (full == maxsize > 0 in v3.10+).
             try:
                 self._queue.get_nowait()
-            except asyncio.QueueEmpty:  # pragma: no cover - shouldn't happen
+            except asyncio.QueueEmpty:  # pragma: no cover
                 pass
             self.dropped_count += 1
             logger.warning(
@@ -121,16 +88,14 @@ class Subscription(typing.Generic[T]):
                 self._maxsize,
                 self.dropped_count,
             )
-        # put_nowait can't raise QueueFull here because we just made room.
         self._queue.put_nowait(value)
 
     def _push_exception(self, exc: BaseException) -> None:
-        """Push an upstream exception and close the stream."""
+        """Push upstream exception and close. Evicts a buffered value
+        if bounded and full — exception delivery wins over buffered data."""
         if self._closed:
             return
         self._closed = True
-        # Make room if needed; exception delivery is more important than
-        # any pending buffered values.
         if self._maxsize and self._queue.full():
             try:
                 self._queue.get_nowait()
@@ -139,7 +104,7 @@ class Subscription(typing.Generic[T]):
         self._queue.put_nowait(_StreamExc(exc))
 
     def _push_end(self) -> None:
-        """Signal end-of-stream from upstream."""
+        """Signal end-of-stream. Evicts if bounded and full."""
         if self._closed:
             return
         self._closed = True
@@ -156,32 +121,15 @@ class Subscription(typing.Generic[T]):
 
     @property
     def qsize(self) -> int:
-        """Approximate number of buffered items currently in the queue.
-
-        Includes any end-of-stream / exception sentinels (so a closed
-        subscription with no buffered values still reports `1`).
-        Useful as a load signal — if `qsize` grows steadily, the
-        consumer is falling behind and may want to call `drop_oldest()`
-        to shed load explicitly.
-        """
+        """Buffered item count (includes any sentinel). Load signal."""
         return self._queue.qsize()
 
     def drop_oldest(self, n: int = 1) -> int:
-        """Discard up to `n` oldest buffered values from the queue.
+        """Consumer-side load-shedding: drop up to `n` oldest values.
 
-        Returns the number actually dropped (may be less than `n` if
-        the queue had fewer than `n` items). Lets a slow consumer
-        implement its own load-shedding policy when it notices the
-        queue growing — e.g. "if qsize > 100, drop the oldest 50 so
-        I catch up to recent data."
-
-        End-of-stream / exception sentinels at the queue head are NOT
-        dropped — they are preserved so the consumer still learns about
-        stream termination. The drop scan stops at the first sentinel.
-
-        `dropped_count` is incremented for each value actually dropped,
-        so the metric reflects both producer-side and consumer-side
-        drops uniformly.
+        Returns the count actually dropped. Stops at the first
+        end-of-stream / exception sentinel so termination signals are
+        never lost. Each drop counts toward `dropped_count`.
         """
         if n < 0:
             raise ValueError(f"n must be >= 0, got {n!r}")
@@ -192,11 +140,9 @@ class Subscription(typing.Generic[T]):
             except asyncio.QueueEmpty:
                 break
             if isinstance(head, (_StreamEnd, _StreamExc)):
-                # Put the sentinel back at the head and stop — we don't
-                # want to swallow termination signals just to shed load.
-                # asyncio.Queue is FIFO with no head-insert primitive,
-                # so we rebuild: pull everything, put sentinel first,
-                # then everything else back.
+                # Sentinel — restore queue order and stop.
+                # asyncio.Queue has no head-insert: drain everything,
+                # re-put sentinel first, then re-put the tail.
                 tail: typing.List[_QueueItem[T]] = []
                 while True:
                     try:
@@ -212,12 +158,7 @@ class Subscription(typing.Generic[T]):
         return dropped
 
     def close(self) -> None:
-        """Stop receiving ticks. Idempotent. Any pending iteration will
-        terminate cleanly on its next `__anext__`.
-
-        After the first call, subsequent calls are no-ops — no duplicate
-        end-of-stream sentinel pushed, no extra unregister attempt.
-        """
+        """Stop receiving ticks. Idempotent — second call is a no-op."""
         if self._closed:
             return
         self._closed = True
@@ -225,13 +166,9 @@ class Subscription(typing.Generic[T]):
             unregister = self._unregister
             self._unregister = None
             unregister(self)
-        # Wake any pending __anext__ with end-of-stream.
-        # put_nowait may raise if unbounded queue is somehow full, but
-        # unbounded queues don't get full.
         try:
             self._queue.put_nowait(_STREAM_END)
-        except asyncio.QueueFull:  # pragma: no cover - bounded + full
-            # Drop oldest and retry. This is a defensive path.
+        except asyncio.QueueFull:  # pragma: no cover - defensive
             try:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:

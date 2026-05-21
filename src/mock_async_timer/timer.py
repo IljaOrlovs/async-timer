@@ -5,14 +5,11 @@ import async_timer
 
 
 class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
-    """Pacemaker that yields one tick per event-loop iteration instead
-    of actually sleeping.
+    """Pacemaker that yields per loop-iter instead of sleeping.
 
-    The "sleep" is replaced with an `AsyncMock` so tests can introspect
-    call counts and arguments — e.g.
-    `pacemaker.sleep.assert_called_with(expected_delay)`. The cancel
-    event is re-checked after each await so an in-flight stop takes
-    effect immediately without producing an extra tick.
+    `sleep` is an `AsyncMock` — tests can assert call args/counts.
+    Cancel/trigger are re-checked after each await so in-flight
+    signals take effect without producing an extra tick.
     """
 
     sleep: unittest.mock.AsyncMock
@@ -44,7 +41,7 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
         return False
 
     async def _sleep_until_next_loop_iter(self):
-        """Awaiting this function will release on the next async loop iteration"""
+        """Yield to the scheduler for one loop iteration."""
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
         loop.call_soon(lambda: fut.set_result(42))
@@ -52,13 +49,7 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
 
 
 class MockTimer(async_timer.Timer):
-    """Test-friendly `Timer` subclass that swaps the real pacemaker for
-    `MockPacemaker`.
-
-    Use it in unit tests where you don't want real wall-clock delays
-    but still want the full `Timer` API (`join`, `wait`, `async for`,
-    `cancel_aws`, callbacks, etc.).
-    """
+    """Timer subclass using `MockPacemaker` — no real sleeps. Full Timer API."""
 
     pacemaker: MockPacemaker
 

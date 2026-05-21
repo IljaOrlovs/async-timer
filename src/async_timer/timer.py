@@ -1,43 +1,17 @@
-"""The `Timer` class and its supporting `FanoutRv` result broadcaster.
+"""`Timer` and its result broadcaster `FanoutRv`.
 
-`Timer` drives a `TimerPacemaker` (which decides *when* a tick fires) and
-a `Caller` (which decides *what* a tick produces from the user's target),
-broadcasting each tick's result to every coroutine waiting via `join()`,
-`wait()`, or `async for`.
+Two delivery models for tick results:
 
-Tick delivery semantics (important!)
-====================================
+* `join()` / `wait()` / `async for self` — single-shot broadcast.
+  A tick is delivered only to consumers awaiting at that instant; busy
+  consumers miss intermediate ticks. Use for "latest cached value"
+  patterns.
 
-`Timer` uses a *single-shot broadcast* model: each tick's result is
-delivered to **every consumer that happened to be awaiting at the moment
-the tick fired**, and is then discarded. A consumer that is busy doing
-work (between iterations of `async for`, between calls to `join()`, etc.)
-when a tick fires **will not see that tick** — they will see the *next*
-tick after they resume waiting.
+* `subscribe()` (see `subscription.py`) — per-consumer queue. Buffers
+  every tick from subscribe-time. Use when you need every tick.
 
-This is the right model for "refresh a cache periodically" or "wake one
-or more sleepers on the next interval" patterns. It is the *wrong* model
-when you need to process every single tick (e.g. event-like semantics,
-durable per-tick work). For that, push from the target into an
-`asyncio.Queue` and consume the queue, e.g.::
-
-    queue: asyncio.Queue[int] = asyncio.Queue()
-    async def producer():
-        value = await fetch_next()
-        await queue.put(value)
-    async with async_timer.Timer(5, target=producer):
-        while True:
-            value = await queue.get()
-            ...  # process every value, even if you fall behind
-
-Notes
------
-* The exception form is *sticky*: if `target` raises, the exception is
-  stored on the fanout's close-state, so consumers that arrive after the
-  failure still see it (rather than a generic `CancelledError`).
-* `last_result` always reflects the most recent successful tick, so
-  consumers that only want "the latest value, whatever it is" can poll
-  it without registering as a waiter.
+Target exceptions are sticky on the fanout: late-arriving waiters see
+the exception, not a generic `CancelledError`.
 """
 
 import asyncio
@@ -66,26 +40,10 @@ TimerCallbackT = typing.Callable[["Timer[T]", TimerMainTaskT[T]], None]
 class FanoutRv(typing.Generic[T]):
     """Single-shot result broadcaster.
 
-    Each call to `send_result(value)` delivers `value` to **every
-    consumer currently awaiting via `wait()`** and then discards it.
-    Consumers that are not awaiting at the moment of the call do not
-    see that result; they will see the next one (whenever they start
-    awaiting again). This is intentional — it matches the "wake up on
-    the next tick" semantics callers want from a Timer.
-
-    **What this means for the Timer**: a consumer that takes longer to
-    process a tick than `delay` will miss intermediate ticks. See the
-    module docstring for guidance on when to use `asyncio.Queue` for
-    every-tick delivery instead.
-
-    `send_exception()` is *sticky*: it both delivers the exception to
-    current waiters and stores it as the close state, so consumers that
-    arrive after the failure still see the exception (not a generic
-    `CancelledError`).
-
-    All mutating operations are synchronous — `set_result`/`set_exception`/
-    `cancel` on futures are non-blocking and list append/clear are atomic
-    in CPython. Only `wait()` is a coroutine.
+    `send_result(v)` resolves every currently-awaiting `wait()` with
+    `v` and clears the list. Consumers not awaiting at that instant
+    miss the value. `send_exception()` is sticky: late waiters also
+    see the exception.
     """
 
     futures: typing.List[asyncio.Future]
@@ -118,16 +76,13 @@ class FanoutRv(typing.Generic[T]):
             if not future.done():
                 future.set_exception(exc)
         self.futures.clear()
-        # Sticky: close the fanout so late-arriving waiters also see
-        # the exception rather than a generic CancelledError.
+        # Sticky close — late waiters see exc rather than CancelledError.
         self._closed = True
         self._close_exc = exc
 
     def cancel(self):
         if self._closed:
-            # Already closed — preserve any existing exception state
-            # (e.g. set by an earlier send_exception).
-            return
+            return  # preserve any sticky exception from send_exception
         self._closed = True
         for future in self.futures:
             if not future.done():
@@ -140,29 +95,20 @@ def _noop_cb(*_, **__):
 
 
 def _default_main_loop_exception_callback(*_, **__):
-    """Default exc_cb: log the in-flight target exception.
-
-    Does NOT re-raise. Re-raising would propagate the exception out of
-    the timer task into the asyncio loop, which then emits a duplicate
-    "Task exception was never retrieved" warning. The loop's `finally`
-    has already cleaned up by the time exc_cb runs, so the task ends
-    naturally regardless.
-    """
+    """Default exc_cb: log the target exception. Does not re-raise."""
     logger.exception("An unexpected exception in the timer loop.")
 
 
 class Timer(typing.Generic[T]):
-    """Periodically invoke `target` and broadcast each result to waiters.
+    """Periodically invoke `target` and broadcast each result.
 
-    Consumers wait for results via `join()`, `wait()`, `async for`, or
-    by polling `last_result`. **Important**: result delivery is
-    single-shot fan-out — a consumer that is busy between awaits when a
-    tick fires will not see that tick. See this module's docstring for
-    guidance, especially the "Tick delivery semantics" section.
+    Read results via `join()`, `wait()`, `async for self`, polling
+    `last_result`, or per-consumer `subscribe()` (see module docstring
+    on delivery models).
     """
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
-    hit_count: int = 0  # Number of times the timer has run so far
+    hit_count: int = 0  # successful ticks so far
     target_caller: "async_timer.target_caller.Caller[T]"
 
     name: typing.Optional[str]
@@ -172,11 +118,7 @@ class Timer(typing.Generic[T]):
     cancel_callback: TimerCallbackT[T]
     last_result: typing.Optional[T] = None
     last_tick_at: typing.Optional[float] = None  # time.monotonic() of last tick
-    # Subscriptions registered via `subscribe()` — each gets every tick
-    # pushed to its own queue (independent of the single-shot fanout).
-    # WeakSet: if the caller drops their reference to a Subscription
-    # without closing it, GC reaps it and it disappears from this set
-    # automatically — no memory leak via accumulating dead subscriptions.
+    # WeakSet — dropped subscriptions get GC'd and auto-removed.
     _subscriptions: "weakref.WeakSet[Subscription[T]]"
 
     def __init__(
@@ -193,41 +135,25 @@ class Timer(typing.Generic[T]):
         jitter: float = 0.0,
         name: typing.Optional[str] = None,
     ):
-        """Create the Timer object.
-
-        Parameters:
-            `delay` - number of seconds between timer invocations.
-            `target` - the callable, coroutine function, generator,
-                async generator, or callable returning any of those
-                that the timer will invoke each tick. The first tick
-                fires immediately on `start()`; subsequent ticks are
-                spaced by `delay`.
-            `exc_cb` - callback the timer will call if `target` raises.
-                Default logs the exception via the per-timer logger.
-                After exc_cb runs, the timer task ends and `cancel_cb`
-                fires.
-            `cancel_cb` - callback the timer will call when the timer
-                task ends for any reason (explicit cancel, target
-                exhaustion via StopIteration, exception, or
-                cancel_aws firing).
-            `cancel_aws` - a sequence of awaitables; the timer stops
-                as soon as any one of them resolves (or raises — the
-                raised exception is logged). These awaitables are
-                single-shot and the Timer cannot be restarted after
-                being constructed with them.
-            `start` - if True, calls `start()` immediately. Requires
-                a running event loop.
-            `mode` - "fixed_delay" (default; next tick fires `delay`
-                after the previous one finishes) or "fixed_rate" (ticks
-                are anchored to a wall-clock schedule; missed slots are
-                skipped with a warning log).
-            `initial_delay` - seconds to wait before the first tick.
-                Default 0 (first tick fires immediately on start).
-            `jitter` - fraction in [0, 1]. Each per-tick sleep is
-                perturbed by ±jitter × sleep to avoid thundering-herd.
-            `name` - optional identifier used in the timer's repr and
-                in the per-timer logger. Useful when an app runs many
-                timers concurrently.
+        """
+        Args:
+            delay: seconds between ticks.
+            target: callable / coroutine fn / (async) generator /
+                callable returning any of those. First tick fires
+                immediately on `start()`.
+            exc_cb: called on target exception. After it runs the task
+                ends and `cancel_cb` fires. Default: log only.
+            cancel_cb: called when the task ends, for any reason.
+            cancel_aws: awaitables that stop the timer when any
+                resolves (or raises — exception is logged).
+                Single-shot: prevents restart.
+            start: call `start()` immediately. Needs a running loop.
+            mode: `"fixed_delay"` (next tick fires `delay` after the
+                previous one *finishes*) or `"fixed_rate"` (anchored to
+                a wall-clock schedule; missed slots are skipped+logged).
+            initial_delay: seconds before the first tick (default 0).
+            jitter: per-tick sleep perturbation, fraction in [0, 1].
+            name: identifier for repr and per-timer logger.
         """
         self.name = name
         self._logger = logger.getChild(name) if name else logger
@@ -239,19 +165,13 @@ class Timer(typing.Generic[T]):
         self._subscriptions = weakref.WeakSet()
         self.exception_callback = exc_cb
         self.cancel_callback = cancel_cb
-        # cancel_aws are single-shot awaitables — track whether the user
-        # passed any so we can fail loudly on restart instead of silently
-        # losing them. Stored as a pending list and registered with the
-        # pacemaker on first start() (not in __init__), so module-scope
-        # use (e.g. `@every(..., cancel_aws=[...])`) works without a
-        # running event loop at decoration time.
+        # Deferred to start() so module-scope use without a running loop
+        # (e.g. `@every(..., cancel_aws=[...])`) doesn't crash.
         self._pending_cancel_aws: typing.Optional[typing.List[typing.Awaitable]] = (
             list(cancel_aws) if cancel_aws else None
         )
         self._had_cancel_aws: bool = bool(cancel_aws)
-        # Separate from main_task (which `cancel()` clears) — survives
-        # across cancel/restart cycles so start() can detect "this is a
-        # restart, not the first run".
+        # Survives cancel/restart cycles so start() can detect restarts.
         self._has_been_started: bool = False
         if start:
             self.start()
@@ -271,20 +191,19 @@ class Timer(typing.Generic[T]):
 
     @property
     def delay(self) -> float:
-        """A shorthand to access timer firing delay"""
+        """Current tick interval (seconds)."""
         return self.pacemaker.delay
 
     def set_delay(self, new_delay: float):
-        """Change the delay."""
+        """Change `delay`. Takes effect on the next sleep."""
         self.pacemaker.delay = new_delay
 
     def start(self):
-        """Schedule the timer to run.
+        """Schedule the timer.
 
-        Calling start() after cancel() restarts the timer with fresh
-        pacemaker, fanout, and target-caller state. Raises RuntimeError
-        on restart if the original construction used `cancel_aws`, since
-        those awaitables are single-shot and would be silently lost.
+        Restart after cancel is supported (fresh pacemaker, fanout, and
+        target-caller state). Raises `RuntimeError` if the timer was
+        built with `cancel_aws` — those are single-shot.
         """
         if self.is_running():
             raise RuntimeError("Already running")
@@ -299,17 +218,16 @@ class Timer(typing.Generic[T]):
         self.result_fanout = FanoutRv()
         if is_restart:
             self.target_caller.reset()
-        # Now that we know a running loop is available, arm any deferred
-        # cancel_aws awaitables registered at construction time.
+        # Arm deferred cancel_aws (loop is required for ensure_future).
         if self._pending_cancel_aws is not None:
             self.pacemaker.stop_on(self._pending_cancel_aws)
             self._pending_cancel_aws = None
-        loop = asyncio.get_running_loop()  # there MUST be a running loop
+        loop = asyncio.get_running_loop()
         self.main_task = loop.create_task(self._loop_callback_routine())
         self._has_been_started = True
 
     def is_running(self) -> bool:
-        """Return `True` if the timer is currently scheduled"""
+        """True if the timer task is scheduled and not done."""
         return (self.main_task is not None) and (not self.main_task.done())
 
     async def __aenter__(self) -> "Timer[T]":
@@ -323,10 +241,10 @@ class Timer(typing.Generic[T]):
         return self
 
     async def join(self) -> T:
-        """Wait for the next tick of the timer and return its result.
+        """Await the next tick and return its result.
 
         Raises `asyncio.CancelledError` if the timer is not running, or
-        if it stops (naturally or via cancel) while we're waiting.
+        stops while we wait.
         """
         if not self.is_running():
             raise asyncio.CancelledError("The timer is not running.")
@@ -339,36 +257,29 @@ class Timer(typing.Generic[T]):
         hits: typing.Optional[int] = None,
         timeout: typing.Optional[float] = None,
     ) -> typing.Optional[T]:
-        """Wait for a hit-count condition, or wait until the timer stops.
+        """Wait for a hit-count condition or until the timer stops.
 
-        Parameters:
-            `hit_count` - wait until `timer.hit_count` reaches this
-                absolute value.
-            `hits` - wait for this many *additional* ticks beyond the
-                current `hit_count`.
-            `timeout` - upper bound on wall-clock seconds to wait.
+        Args:
+            hit_count: wait until `self.hit_count` reaches this absolute value.
+            hits: wait for this many additional ticks.
+            timeout: wall-clock upper bound, seconds.
 
-        Behaviour matrix (`hit_count` and `hits` are mutually exclusive;
-        `hit_count` takes precedence if both are passed):
+        `hit_count` and `hits` are mutually exclusive (`hit_count` wins
+        if both are given).
 
-        ┌─────────────────────────┬──────────────┬───────────────────────────────┐
-        │ Wait condition          │ Timeout      │ Outcome                       │
-        ├─────────────────────────┼──────────────┼───────────────────────────────┤
-        │ hit_count or hits set   │ not reached  │ returns last tick result      │
-        │ hit_count or hits set   │ exceeded     │ raises asyncio.TimeoutError   │
-        │ neither set (idle wait) │ not provided │ blocks until timer stops      │
-        │ neither set (idle wait) │ provided     │ returns last seen result      │
-        │                         │              │ after timeout (NOT raised)    │
-        └─────────────────────────┴──────────────┴───────────────────────────────┘
+        ┌─────────────────────────┬─────────────┬───────────────────────────┐
+        │ Wait condition          │ Timeout     │ Outcome                   │
+        ├─────────────────────────┼─────────────┼───────────────────────────┤
+        │ hit_count or hits set   │ not reached │ returns last tick result  │
+        │ hit_count or hits set   │ exceeded    │ raises TimeoutError       │
+        │ neither (idle wait)     │ not given   │ blocks until timer stops  │
+        │ neither (idle wait)     │ given       │ returns last_rv (no raise)│
+        └─────────────────────────┴─────────────┴───────────────────────────┘
 
-        The "idle wait + timeout returns last_rv" mode is deliberate —
-        it gives callers a "wait for the timer to settle, but don't
-        hang forever" pattern without having to handle TimeoutError.
-        If you want a TimeoutError on idle wait, pass `hits=1` instead
-        (or use `await asyncio.wait_for(timer.wait(), timeout=T)`).
+        For TimeoutError on idle wait, use `hits=1`, or
+        `await asyncio.wait_for(timer.wait(), timeout=T)`.
 
-        Returns `None` if no ticks happened during the wait (e.g. a
-        zero-hit condition was satisfied immediately).
+        Returns `None` if no tick happened during the wait.
         """
         start_time = time.monotonic()
         timeout_left = timeout
@@ -387,14 +298,10 @@ class Timer(typing.Generic[T]):
                 last_rv = await asyncio.wait_for(self.join(), timeout_left)
                 need_to_wait_for -= 1
                 if timeout is not None:
-                    time_passed = time.monotonic() - start_time
-                    timeout_left = timeout - time_passed
+                    timeout_left = timeout - (time.monotonic() - start_time)
         except (asyncio.CancelledError, asyncio.TimeoutError):
-            # Cancelled/Timeout error is what we were waiting
-            # for in the infinite wait mode
-            if infinite_wait:
-                pass
-            else:
+            # Idle wait treats both as "we're done waiting".
+            if not infinite_wait:
                 raise
         return last_rv
 
@@ -413,8 +320,7 @@ class Timer(typing.Generic[T]):
                     break
                 except Exception as err:
                     self.result_fanout.send_exception(err)
-                    # Snapshot before iteration: WeakSet entries can
-                    # disappear mid-loop if the subscriber is GC'd.
+                    # Snapshot: WeakSet may shrink mid-iter if a sub is GC'd.
                     for sub in list(self._subscriptions):
                         sub._push_exception(err)
                     self.exception_callback(self, self.target_caller.target)
@@ -427,12 +333,8 @@ class Timer(typing.Generic[T]):
                         sub._push_value(rv)
                 self.hit_count += 1
         finally:
-            # Main loop finished - cancel all watchers
             self.result_fanout.cancel()
-            # Signal end-of-stream to any subscriptions that didn't
-            # already see an exception (those got it pushed above).
-            # We snapshot the list because _push_end → close → unregister
-            # may mutate it.
+            # End-of-stream for any sub that didn't already get _push_exception.
             for sub in list(self._subscriptions):
                 sub._push_end()
             self._subscriptions.clear()
@@ -444,36 +346,24 @@ class Timer(typing.Generic[T]):
         *,
         name: typing.Optional[str] = None,
     ) -> "Subscription[T]":
-        """Open a buffered per-consumer feed of every subsequent tick.
+        """Open a buffered per-consumer feed.
 
-        Unlike `join()` / `wait()` / `async for self`, a Subscription
-        does NOT drop intermediate ticks when the consumer is slow —
-        each subscriber owns its own queue. Use this when you need to
-        process every tick (logging, metrics, event dispatch).
+        Unlike `join()`/`wait()`/`async for self`, a Subscription does
+        NOT drop intermediate ticks when the consumer is slow — each
+        subscriber owns its own queue.
 
-        Parameters:
-            `maxsize` - underlying queue bound. 0 (default) is unbounded.
-                If positive and the queue fills up, the oldest buffered
-                tick is dropped to make room and a warning is logged.
-            `name` - optional identifier used in the drop-warning log.
+        Args:
+            maxsize: queue bound. 0 (default) is unbounded; otherwise
+                oldest is dropped and a warning logged when full.
+            name: identifier shown in the drop-warning log.
 
-        Returns:
-            A `Subscription` instance — an async context manager that
-            yields the same object (for `async with` ergonomics) and
-            also an async iterator over tick values.
-
-        Usage:
+        Returns a `Subscription` — an async context manager and async
+        iterator over every tick from now until close. Target
+        exceptions re-raise from the subscriber's `__anext__`.
 
             async with timer.subscribe() as feed:
                 async for value in feed:
                     await process(value)
-
-        The subscription receives every tick from the moment of
-        subscribe() until it is closed (via `async with` exit, an
-        explicit `close()`, or the upstream timer ending). If the
-        upstream timer's target raises, the subscriber sees the
-        exception re-raised from `__anext__` (consumers learn about
-        failures rather than silently exiting).
         """
         sub: Subscription[T] = Subscription(maxsize=maxsize, name=name)
         sub._unregister = self._unsubscribe
@@ -481,44 +371,32 @@ class Timer(typing.Generic[T]):
         return sub
 
     def _unsubscribe(self, sub: "Subscription[T]") -> None:
-        # discard() is no-op if absent (GC-reaped, double-close, etc.)
+        # discard: no-op if already GC-reaped or double-closed.
         self._subscriptions.discard(sub)
 
     async def trigger(self) -> T:
-        """Fire the target now, then resume the regular schedule.
+        """Fire the target now and return its result.
 
-        Returns the result of the triggered tick. Useful for "refresh
-        on demand, then go back to the periodic schedule" patterns.
-
-        Raises `RuntimeError` if the timer is not currently running,
-        or `asyncio.CancelledError` if the timer stops while the
-        triggered tick is in flight.
+        Raises `RuntimeError` if not running, or `CancelledError` if
+        the timer stops while the triggered tick is in flight.
         """
         if not self.is_running():
             raise RuntimeError("Cannot trigger a Timer that is not running")
-        # Register the join() waiter *before* nudging the pacemaker, so
-        # we don't miss the resulting tick.
+        # Register the waiter before nudging the pacemaker.
         wait = asyncio.ensure_future(self.result_fanout.wait())
         self.pacemaker.trigger()
         try:
             return await wait
         finally:
-            # If a naturally-scheduled tick fired between our waiter
-            # registration and the pacemaker noticing the trigger, our
-            # `wait` is already resolved but the trigger event is still
-            # set — clear it so the pacemaker doesn't fire a phantom
-            # extra tick on its next iteration.
+            # Clear stale trigger flag if a natural tick beat us to the punch
+            # (prevents a phantom extra tick on the next pacemaker iteration).
             self.pacemaker._trigger_evt.clear()
 
     async def cancel(self):
-        """Unschedule the timer.
+        """Stop the timer; await full cleanup before returning.
 
-        Awaits the underlying task so that by the time this returns,
-        the cancel callback has fired and waiters have been resolved.
-
-        Safe to call from inside `cancel_cb`, `exc_cb`, or the target
-        itself — in that case the awaiting-the-task step is skipped
-        (it would deadlock on `current_task`).
+        Safe to call from inside `target`, `exc_cb`, or `cancel_cb` —
+        a self-cancel skips the `await task` step (would deadlock).
         """
         if not self.main_task:
             return
@@ -527,19 +405,14 @@ class Timer(typing.Generic[T]):
         self.pacemaker.stop()
         task.cancel()
         if asyncio.current_task() is task:
-            # Self-cancel from inside the timer's own task — cannot await
-            # ourselves. The cancellation has been scheduled; the task's
-            # own `finally` will run cleanup on the next yield.
-            return
+            return  # self-cancel: task's own `finally` will clean up
         try:
             await task
         except BaseException:
-            # The task's own callbacks already saw any exception;
-            # the caller of cancel() should not get it raised here.
-            pass
+            pass  # task callbacks already saw any exception
 
     async def stop(self):
-        """An alias to `cancel()`"""
+        """Alias for `cancel()`."""
         return await self.cancel()
 
     def __repr__(self) -> str:

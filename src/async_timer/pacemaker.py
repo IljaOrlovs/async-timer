@@ -13,24 +13,16 @@ class TimerPacemaker:
     """Async-iterable that yields once per `delay` seconds.
 
     Modes:
-      * `"fixed_delay"` (default): each tick fires `delay` seconds after
-        the previous tick *completes*. Long-running consumers cause the
-        schedule to drift.
-      * `"fixed_rate"`: ticks are anchored to a wall-clock schedule of
-        `t0 + n*delay`. If processing of a tick takes longer than
-        `delay`, the missed slot(s) are skipped and a warning is logged.
+      * `"fixed_delay"`: next tick fires `delay` after the previous
+        one *finishes* (schedule drifts under slow consumers).
+      * `"fixed_rate"`: ticks anchored to `t0 + n*delay`; missed
+        slots are skipped and a warning is logged.
 
-    Optional `initial_delay` adds a leading sleep before the very first
-    tick. Optional `jitter` perturbs each per-tick sleep by ±jitter as
-    a fraction of `delay` (e.g. 0.1 = ±10%) to avoid thundering-herd
-    in distributed deployments.
-
-    Iteration ends — `StopAsyncIteration` is raised — when either
-    `stop()` is called explicitly or one of the awaitables registered
-    via `stop_on()` resolves.
-
-    `_reset()` is provided so a single instance can be re-used across
-    `Timer.start()` / `Timer.cancel()` cycles.
+    `initial_delay` adds a leading sleep before the first tick.
+    `jitter` (fraction in [0, 1]) perturbs each per-tick sleep to
+    avoid thundering-herd. Iteration ends on `stop()` or when any
+    `stop_on()` awaitable resolves. `_reset()` lets one instance be
+    reused across Timer start/cancel cycles.
     """
 
     delay: float
@@ -42,10 +34,9 @@ class TimerPacemaker:
     _cancel_futs: typing.List[asyncio.futures.Future]
     _cancel_evt: asyncio.Event
     _trigger_evt: asyncio.Event
-    _start_time: typing.Optional[float] = None  # wall-clock anchor for fixed_rate
-    # 0-indexed position of the most recently emitted tick. Tick N is
-    # scheduled to fire at _start_time + N*delay (so tick 0 = the very
-    # first emission, at _start_time exactly).
+    _start_time: typing.Optional[float] = None  # fixed_rate anchor
+    # Index of most recently emitted tick (0-based). Tick N is scheduled
+    # for _start_time + N*delay.
     _tick_number: int = 0
 
     def __init__(
@@ -73,13 +64,10 @@ class TimerPacemaker:
         self._trigger_evt = asyncio.Event()
 
     def stop_on(self, aws: typing.Sequence[typing.Awaitable]):
-        """Register awaitables that, when any one resolves or raises,
-        will stop this pacemaker.
+        """Stop when any registered awaitable resolves (or raises).
 
-        Requires a running event loop (uses `asyncio.ensure_future`).
-        The wrapped futures are tracked on `_cancel_futs` and cancelled
-        on `stop()`. Awaitables passed here are single-shot — they are
-        cleared on stop and not re-armed by `_reset()`.
+        Requires a running loop. Single-shot — cleared on `stop()`,
+        not re-armed by `_reset()`.
         """
         for el in aws:
             fut = asyncio.ensure_future(el)
@@ -87,9 +75,7 @@ class TimerPacemaker:
             self._cancel_futs.append(fut)
 
     def _on_cancel_fut_done(self, fut: asyncio.Future):
-        # Consume any exception so asyncio does not emit
-        # "exception was never retrieved" warnings — but surface it
-        # via logging so it isn't silently swallowed.
+        # Consume the exception (silences asyncio warning) and log it.
         if not fut.cancelled():
             exc = fut.exception()
             if exc is not None:
@@ -113,18 +99,15 @@ class TimerPacemaker:
         self._cancel_futs.clear()
 
     def trigger(self):
-        """Wake any in-progress sleep so the next tick fires immediately.
+        """Wake an in-progress sleep so the next tick fires now.
 
-        Has no effect if the pacemaker is not currently sleeping. In
-        `fixed_rate` mode, the wall-clock schedule is re-anchored to
-        the moment of the triggered tick, so subsequent ticks fire one
-        `delay` apart from the trigger rather than catching up to the
-        original schedule.
+        No-op if not sleeping. In `fixed_rate`, re-anchors the
+        schedule from this moment (no catch-up).
         """
         self._trigger_evt.set()
 
     def _reset(self):
-        """Reset state so the iterator can be re-used after stop()."""
+        """Reset for re-iteration after stop()."""
         self._first_iter = True
         self._running = True
         self._start_time = None
@@ -135,7 +118,6 @@ class TimerPacemaker:
             self._trigger_evt = asyncio.Event()
 
     def __aiter__(self):
-        """Return the iterator (this object is its own iterator)."""
         return self
 
     async def __anext__(self):
@@ -149,8 +131,7 @@ class TimerPacemaker:
                 except StopAsyncIteration:
                     self.stop()
                     raise
-            # Anchor the wall-clock schedule at the moment of the
-            # first emitted tick (tick 0).
+            # Anchor at the first emission (tick 0).
             self._start_time = time.monotonic()
             self._tick_number = 0
             return None
@@ -162,9 +143,7 @@ class TimerPacemaker:
             self._tick_number += 1
 
         if wait_for <= 0:
-            # Triggered tick or back-to-back in fixed_rate; still yield
-            # control to other tasks at least once to avoid starvation.
-            await asyncio.sleep(0)
+            await asyncio.sleep(0)  # always yield to avoid starvation
             return None
         try:
             was_triggered = await self._try_wait(wait_for)
@@ -172,26 +151,19 @@ class TimerPacemaker:
             self.stop()
             raise
         if was_triggered and self.mode == "fixed_rate":
-            # Re-anchor the fixed-rate schedule to the moment of this
-            # triggered tick. Without this, the next iteration would
-            # compute its slot from the original anchor and either fire
-            # too soon (catching up) or warn about "falling behind".
+            # Re-anchor from the trigger moment (don't catch up).
             self._start_time = time.monotonic()
             self._tick_number = 0
         return None
 
     def _compute_fixed_rate_wait(self) -> float:
-        """Time to sleep before the next fixed-rate slot.
+        """Sleep needed before the next fixed-rate slot.
 
-        If we've already missed the next slot (typically because the
-        consumer's processing of the previous tick took longer than
-        `delay`), log a warning and advance `_tick_number` past every
-        slot that is in the past, so the *next* emitted tick lines up
-        with a still-future slot. Returns the wait until that slot.
+        Skips past every slot already in the past (logs once per skip
+        batch). Advances `_tick_number` accordingly.
         """
         assert self._start_time is not None
         now = time.monotonic()
-        # Next tick to emit is index `_tick_number + 1`.
         target_index = self._tick_number + 1
         next_tick_at = self._start_time + target_index * self.delay
         skipped = 0
@@ -209,10 +181,7 @@ class TimerPacemaker:
             )
         self._tick_number = target_index
         wait_for = next_tick_at - now
-        # Apply jitter within the *remaining* wait (not the full delay).
-        # Capping at `wait_for` ensures jitter never pushes the tick
-        # past the scheduled slot boundary, which would falsely register
-        # as "fell behind" on the next iteration.
+        # Cap jitter at wait_for so it can't push past the slot boundary.
         return self._apply_jitter(wait_for, cap=wait_for)
 
     def _apply_jitter(self, base: float, cap: typing.Optional[float] = None) -> float:
@@ -227,11 +196,10 @@ class TimerPacemaker:
         return out
 
     async def _try_wait(self, delay: float) -> bool:
-        """Wait for `delay`, or until cancel/trigger fires.
+        """Wait `delay` or until cancel/trigger fires.
 
-        Raises `StopAsyncIteration` if cancel was signalled.
-        Returns `True` if a trigger cut the wait short, `False` on a
-        normal timeout.
+        Raises `StopAsyncIteration` on cancel. Returns True if cut
+        short by a trigger, False on normal timeout.
         """
         cancel_task = asyncio.ensure_future(self._cancel_evt.wait())
         trigger_task = asyncio.ensure_future(self._trigger_evt.wait())
@@ -248,7 +216,6 @@ class TimerPacemaker:
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
         if self._trigger_evt.is_set():
-            # Consume the trigger so the next sleep is normal again.
             self._trigger_evt.clear()
             return True
         return False

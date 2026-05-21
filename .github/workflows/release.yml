@@ -12,21 +12,24 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v4
-      - name: Install dependencies
+      - uses: actions/checkout@v4
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4
+        with:
+          python-version: '3.13'
+      - name: Set version from tag
         run: |
-          python3 -m pip install --upgrade pip poetry
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
       - name: Build packages
-        run: |
-          poetry version "${GITHUB_REF_NAME}"
-          poetry build
-      - name: Publish distribution to Test PyPI
-        run: |
-          poetry config pypi-token.test-pypi "${{ secrets.TEST_PYPI_API_TOKEN }}"
-          poetry publish -r test-pypi
-      - name: Publish distribution to PRODUCTION PyPI
-        run: |
-          poetry config pypi-token.pypi "${{ secrets.PYPI_API_TOKEN }}"
-          poetry publish
+        run: pdm build
+      - name: Publish to Test PyPI
+        env:
+          PDM_PUBLISH_USERNAME: __token__
+          PDM_PUBLISH_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: pdm publish --no-build --repository https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        env:
+          PDM_PUBLISH_USERNAME: __token__
+          PDM_PUBLISH_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: pdm publish --no-build

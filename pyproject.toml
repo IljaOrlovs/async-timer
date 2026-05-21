@@ -1,86 +1,89 @@
-[tool.poetry]
+[project]
 name = "async-timer"
-version = "0.0.0dev0"
+version = "0.0.0.dev0"
 description = "The missing Python async timer."
-authors = ["Ilya O. <vrghost@gmail.com>"]
-license = "MIT"
-readme = "README.md"
-packages = [
-    {include = "async_timer", from = "src"},
-    {include = "mock_async_timer", from = "src"}
+authors = [
+    {name = "Ilya O.", email = "vrghost@gmail.com"},
 ]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+keywords = ["async", "timer"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
-keywords = ["async", "timer"]
+dependencies = []
 
-[tool.poetry.urls]
-"Source" = "https://github.com/VRGhost/async-timer"
+[project.urls]
+Source = "https://github.com/VRGhost/async-timer"
 
-[tool.poetry.dependencies]
-python = "^3.8"
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-local-badge>=1.0.3",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.8",
+    "asyncstdlib>=3.12",
+    "pyright>=1.1.409",
+]
 
-[tool.poetry.group.dev.dependencies]
-black = "^23.11.0"
-pytest = "^7.4.3"
-pytest-asyncio = "^0.23.2"
-pytest-local-badge = "^1.0.3"
-ruff = "^0.1.7"
-pytest-cov = "^4.1.0"
-pytest-timeout = "^2.2.0"
-asyncstdlib = "^3.10.9"
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+package-dir = "src"
+includes = ["src/async_timer", "src/mock_async_timer"]
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
+line-length = 88
+
+[tool.ruff.lint]
 select = [
-    # https://beta.ruff.rs/docs/rules/
-    "A", # do not shadow bultins - TODO
-    "B",  # flake8-bugbear
+    "A",
+    "B",
     "C",
     "E",
     "F",
-    "I",  # isort
-    "W",  # pycodestyle
-    "N",  # pep8 naming
-    "C4", # list comprehensions
-    "T20", # print()
-    "PTH", # use-pathlib - todo
+    "I",
+    "W",
+    "N",
+    "C4",
+    "T20",
+    "PTH",
 ]
 ignore = ["N802", "F841"]
-line-length = 88
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = [
-    # imported but unused
     "F401",
-    # E402 Module level import not at top of file
     "E402",
 ]
 
-
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 order-by-type = true
-known-first-party = ["async_timer", "mock_async_timer", ]
+known-first-party = ["async_timer", "mock_async_timer"]
 forced-separate = ["tests"]
 
-[tool.black]
-line-length = 88
-target-version = ['py310']
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
 timeout = 3
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+asyncio_mode = "auto"

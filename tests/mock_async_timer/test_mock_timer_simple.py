@@ -40,9 +40,10 @@ async def test_mock_timer_is_coroutine_friendly():
         timer_hit_count += 1
 
     my_hit_count = 0
-    async with mock_async_timer.MockTimer(
-        target=_target, delay=10_000
-    ), mock_async_timer.MockTimer(target=_target, delay=10_000):
+    async with (
+        mock_async_timer.MockTimer(target=_target, delay=10_000),
+        mock_async_timer.MockTimer(target=_target, delay=10_000),
+    ):
         for _ in range(101):
             await asyncio.sleep(10e-5)
             my_hit_count += 1

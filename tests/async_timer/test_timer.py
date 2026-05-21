@@ -68,7 +68,7 @@ class TestAsyncFunc:
             return val
 
         async with async_timer.Timer(10e-5, target=_target) as timer:
-            async for (idx, val) in asyncstdlib.enumerate(timer):
+            async for idx, val in asyncstdlib.enumerate(timer):
                 async_for_vals.append(val)
                 await asyncio.sleep(0.01)
                 if idx > 11:
@@ -89,7 +89,7 @@ class TestAsyncFunc:
             return val
 
         async with async_timer.Timer(10e-5, target=_target) as timer:
-            async for (idx, val) in asyncstdlib.enumerate(timer):
+            async for idx, val in asyncstdlib.enumerate(timer):
                 async_for_vals.append(val)
                 await asyncio.sleep(0.01)
                 if idx > 11:
@@ -118,7 +118,7 @@ class TestAsyncFunc:
             exc_cb=lambda *a, **kw: exc_evt.set(),
             cancel_cb=lambda *a, **kw: term_evt.set(),
         ) as timer:
-            async for (idx, val) in asyncstdlib.enumerate(timer):
+            async for idx, val in asyncstdlib.enumerate(timer):
                 async_for_vals.append(val)
                 await asyncio.sleep(0.01)
                 if idx > 11:
@@ -149,7 +149,7 @@ class TestAsyncFunc:
             constructor_target = _target
 
         async with async_timer.Timer(10e-5, target=constructor_target) as timer:
-            async for (idx, val) in asyncstdlib.enumerate(timer):
+            async for idx, val in asyncstdlib.enumerate(timer):
                 async_for_vals.append(val)
                 await asyncio.sleep(0.01)
                 if idx > 11:

@@ -1,4 +1,5 @@
 """Utility async io functions"""
+
 import asyncio
 import logging
 import time
@@ -96,7 +97,7 @@ class Timer(typing.Generic[T]):
                             one resolving cancels the timer
         """
         self.pacemaker = async_timer.pacemaker.TimerPacemaker(delay)
-        self.target_caller = async_timer.traget_caller.Caller(target)
+        self.target_caller = async_timer.target_caller.Caller(target)
         self.result_fanout = FanoutRv()
         self.exception_callback = exc_cb
         self.cancel_callback = cancel_cb

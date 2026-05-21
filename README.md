@@ -22,6 +22,7 @@ This package is particularly useful for tasks like automatically updating caches
   * Synchronous generators
   * Asynchronous generators
 * **Wait for the Next Tick**: You can set it up so your program waits for the timer to do its thing, and then continues. `await timer.wait(hits=N, timeout=T)` raises on timeout when waiting for a specific number of ticks; `await timer.wait(timeout=T)` (no hit condition) is a bounded *idle* wait that returns the last seen value without raising — useful for "let the timer settle, but don't hang forever" patterns.
+* **Single-shot broadcast delivery**: each tick's result is delivered to every consumer currently awaiting (`join()` / `async for` / `wait()`) at the moment the tick fires, and then discarded. A consumer that's busy when a tick fires will *not* see that tick — it will see the next one. This matches "refresh a cache periodically" semantics. If you need every-tick delivery instead, push from `target` into an `asyncio.Queue` and consume the queue.
 * **Keep Getting Updates**: You can use it in a loop to keep getting updates every time the timer goes off.
 * **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor argument). `await cancel()` waits for cleanup to complete before returning, and is safe to call from inside the target or its callbacks.
 * **Restartable**: Calling `start()` after `cancel()` resumes the timer with fresh pacemaker, fanout, and target-caller state (generator targets get a fresh generator). Restart is rejected with a clear error if the original construction used `cancel_aws`, since those awaitables are single-shot.
@@ -165,4 +166,31 @@ async def refresh_db():
 # Elsewhere in the app:
 def get_cached_value():
     return refresh_db.last_result  # `None` until the first tick fires
+```
+
+### When you need every tick (queue pattern)
+
+`Timer`'s built-in delivery is single-shot fan-out: a slow consumer
+misses intermediate ticks. If you need to process **every** tick (e.g.
+log every measurement, dispatch every event), have the target push to
+an `asyncio.Queue` and consume the queue at your own pace:
+
+```python
+import asyncio
+import async_timer
+
+queue: asyncio.Queue[int] = asyncio.Queue()
+counter = 0
+
+async def produce():
+    global counter
+    counter += 1
+    await queue.put(counter)
+
+async def main():
+    async with async_timer.Timer(1.0, target=produce):
+        while True:
+            value = await queue.get()
+            print(f"got tick {value}")  # never misses one
+            await asyncio.sleep(2.0)    # even though consumer is slow
 ```

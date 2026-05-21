@@ -4,6 +4,40 @@
 a `Caller` (which decides *what* a tick produces from the user's target),
 broadcasting each tick's result to every coroutine waiting via `join()`,
 `wait()`, or `async for`.
+
+Tick delivery semantics (important!)
+====================================
+
+`Timer` uses a *single-shot broadcast* model: each tick's result is
+delivered to **every consumer that happened to be awaiting at the moment
+the tick fired**, and is then discarded. A consumer that is busy doing
+work (between iterations of `async for`, between calls to `join()`, etc.)
+when a tick fires **will not see that tick** — they will see the *next*
+tick after they resume waiting.
+
+This is the right model for "refresh a cache periodically" or "wake one
+or more sleepers on the next interval" patterns. It is the *wrong* model
+when you need to process every single tick (e.g. event-like semantics,
+durable per-tick work). For that, push from the target into an
+`asyncio.Queue` and consume the queue, e.g.::
+
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    async def producer():
+        value = await fetch_next()
+        await queue.put(value)
+    async with async_timer.Timer(5, target=producer):
+        while True:
+            value = await queue.get()
+            ...  # process every value, even if you fall behind
+
+Notes
+-----
+* The exception form is *sticky*: if `target` raises, the exception is
+  stored on the fanout's close-state, so consumers that arrive after the
+  failure still see it (rather than a generic `CancelledError`).
+* `last_result` always reflects the most recent successful tick, so
+  consumers that only want "the latest value, whatever it is" can poll
+  it without registering as a waiter.
 """
 
 import asyncio
@@ -28,19 +62,28 @@ TimerCallbackT = typing.Callable[["Timer[T]", TimerMainTaskT[T]], None]
 
 
 class FanoutRv(typing.Generic[T]):
-    """An object that shares a result across all waiters.
+    """Single-shot result broadcaster.
 
-    All mutating operations are synchronous: `set_result`/`set_exception`/
+    Each call to `send_result(value)` delivers `value` to **every
+    consumer currently awaiting via `wait()`** and then discards it.
+    Consumers that are not awaiting at the moment of the call do not
+    see that result; they will see the next one (whenever they start
+    awaiting again). This is intentional — it matches the "wake up on
+    the next tick" semantics callers want from a Timer.
+
+    **What this means for the Timer**: a consumer that takes longer to
+    process a tick than `delay` will miss intermediate ticks. See the
+    module docstring for guidance on when to use `asyncio.Queue` for
+    every-tick delivery instead.
+
+    `send_exception()` is *sticky*: it both delivers the exception to
+    current waiters and stores it as the close state, so consumers that
+    arrive after the failure still see the exception (not a generic
+    `CancelledError`).
+
+    All mutating operations are synchronous — `set_result`/`set_exception`/
     `cancel` on futures are non-blocking and list append/clear are atomic
-    in CPython. Only `wait()` is a coroutine — it returns a future that
-    callers await for the next posted result.
-
-    `send_exception()` is *sticky*: it closes the fanout *with* the
-    exception so any subsequent `wait()` (e.g. from a consumer that
-    wasn't yet registered when the exception was sent) still sees it
-    instead of a generic CancelledError. Without this, the async-for
-    consumer pattern would silently swallow target exceptions raised
-    while the consumer was doing other work.
+    in CPython. Only `wait()` is a coroutine.
     """
 
     futures: typing.List[asyncio.Future]
@@ -107,7 +150,14 @@ def _default_main_loop_exception_callback(*_, **__):
 
 
 class Timer(typing.Generic[T]):
-    """The main Timer object"""
+    """Periodically invoke `target` and broadcast each result to waiters.
+
+    Consumers wait for results via `join()`, `wait()`, `async for`, or
+    by polling `last_result`. **Important**: result delivery is
+    single-shot fan-out — a consumer that is busy between awaits when a
+    tick fires will not see that tick. See this module's docstring for
+    guidance, especially the "Tick delivery semantics" section.
+    """
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
     hit_count: int = 0  # Number of times the timer has run so far

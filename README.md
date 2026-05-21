@@ -23,8 +23,19 @@ This package is particularly useful for tasks like automatically updating caches
   * Asynchronous generators
 * **Wait for the Next Tick**: You can set it up so your program waits for the timer to do its thing, and then continues.
 * **Keep Getting Updates**: You can use it in a loop to keep getting updates every time the timer goes off.
-* **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor artument)
+* **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor argument). `await cancel()` waits for cleanup to complete before returning, and is safe to call from inside the target or its callbacks.
+* **Restartable**: Calling `start()` after `cancel()` resumes the timer with fresh pacemaker, fanout, and target-caller state (generator targets get a fresh generator). Restart is rejected with a clear error if the original construction used `cancel_aws`, since those awaitables are single-shot.
 * **Test friendly**: The package provides an additional `mock_async_timer.MockTimer` class with mocked sleep function to aid in your testing
+
+## Requirements
+
+Python 3.9 or newer.
+
+## Installation
+
+```bash
+pip install async-timer
+```
 
 ## Example Usage
 
@@ -72,21 +83,28 @@ if __name__ == "__main__":
 
 ### join()
 ```python
-
+import asyncio
 import async_timer
 
-timer = async_timer.Timer(12, target=lambda: 42)
-timer.start()
-val = await timer.join()  # `val` will be set to 42 after 12 seconds
+async def main():
+    timer = async_timer.Timer(12, target=lambda: 42)
+    timer.start()
+    val = await timer.join()  # `val` will be set to 42 after the first tick
+    await timer.cancel()
+
+asyncio.run(main())
 ```
 
-### for loop
+### async for loop
 ```python
-# Async for loop example
-import async_timer
+import asyncio
 import time
-with async_timer.Timer(14, target=time.time) as timer:
-    async for time_rv in timer:
-        print(f"{time_rv=}")  # Prints current time every 14 seconds
+import async_timer
 
+async def main():
+    async with async_timer.Timer(14, target=time.time) as timer:
+        async for time_rv in timer:
+            print(f"{time_rv=}")  # Prints current time every 14 seconds
+
+asyncio.run(main())
 ```

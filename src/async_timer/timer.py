@@ -1,4 +1,10 @@
-"""Utility async io functions"""
+"""The `Timer` class and its supporting `FanoutRv` result broadcaster.
+
+`Timer` drives a `TimerPacemaker` (which decides *when* a tick fires) and
+a `Caller` (which decides *what* a tick produces from the user's target),
+broadcasting each tick's result to every coroutine waiting via `join()`,
+`wait()`, or `async for`.
+"""
 
 import asyncio
 import logging
@@ -78,7 +84,7 @@ class Timer(typing.Generic[T]):
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
     hit_count: int = 0  # Number of times the timer has run so far
-    target: TimerMainTaskT[T]
+    target_caller: "async_timer.target_caller.Caller"
 
     result_fanout: FanoutRv[T]
     main_task: typing.Optional[asyncio.Task] = None
@@ -97,12 +103,26 @@ class Timer(typing.Generic[T]):
         """Create the Timer object.
 
         Parameters:
-            `delay` - number of seconds between timer incovations
-            `target` - the callable the timer will be invoking at the `delay` period
-            `exc_cb` - a callback that the timer will call on exception
-            `cancel_cb` - callback the timer will call at cancellation
-            `cancel_aws` - a list of awaitables, where any
-                            one resolving cancels the timer
+            `delay` - number of seconds between timer invocations.
+            `target` - the callable, coroutine function, generator,
+                async generator, or callable returning any of those
+                that the timer will invoke each tick. The first tick
+                fires immediately on `start()`; subsequent ticks are
+                spaced by `delay`.
+            `exc_cb` - callback the timer will call if `target` raises.
+                Default re-raises the exception inside the timer task
+                and logs it; the task then ends and `cancel_cb` fires.
+            `cancel_cb` - callback the timer will call when the timer
+                task ends for any reason (explicit cancel, target
+                exhaustion via StopIteration, exception, or
+                cancel_aws firing).
+            `cancel_aws` - a sequence of awaitables; the timer stops
+                as soon as any one of them resolves (or raises — the
+                raised exception is logged). These awaitables are
+                single-shot and the Timer cannot be restarted after
+                being constructed with them.
+            `start` - if True, calls `start()` immediately. Requires
+                a running event loop.
         """
         self.pacemaker = self._create_pacemaker(delay)
         self.target_caller = async_timer.target_caller.Caller(target)
@@ -175,12 +195,14 @@ class Timer(typing.Generic[T]):
         return self
 
     async def join(self) -> T:
-        """Wait for the next tick of the timer"""
+        """Wait for the next tick of the timer and return its result.
+
+        Raises `asyncio.CancelledError` if the timer is not running, or
+        if it stops (naturally or via cancel) while we're waiting.
+        """
         if not self.is_running():
             raise asyncio.CancelledError("The timer is not running.")
-        return (
-            await self.result_fanout.wait()
-        )  # this can raise `asyncio.CancelledError`
+        return await self.result_fanout.wait()
 
     async def wait(
         self,
@@ -256,7 +278,7 @@ class Timer(typing.Generic[T]):
             self.cancel_callback(self, self.target_caller.target)
 
     async def cancel(self):
-        """Unshedule the timer.
+        """Unschedule the timer.
 
         Awaits the underlying task so that by the time this returns,
         the cancel callback has fired and waiters have been resolved.

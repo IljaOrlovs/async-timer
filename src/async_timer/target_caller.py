@@ -1,4 +1,17 @@
-"""This module is responsible for the magic behaviour calling the `target` function."""
+"""Dispatch logic that lets `Timer` accept many shapes of `target`.
+
+A `target` may be any of:
+  * a plain callable returning a value (sync or async),
+  * a generator function or async generator function (the call is made
+    once on first tick and the resulting iterator is advanced thereafter),
+  * a generator / async generator / iterator object directly,
+  * a callable returning any of the iterator forms above.
+
+The `Caller` introspects on the first tick, picks the right dispatch
+mode, then re-uses it for every subsequent tick. `reset()` clears that
+state so the introspection runs again on the next call — used by
+`Timer.start()` to give restarted timers a fresh iterator.
+"""
 
 import inspect
 import typing
@@ -6,6 +19,8 @@ from collections.abc import Iterator
 
 
 class Caller:
+    """Calls `target` once per tick, normalising the many shapes it can take."""
+
     target: typing.Any
     get_next_val: typing.Optional[typing.Callable[[], typing.Any]] = None
     first_call: bool = True
@@ -60,7 +75,7 @@ class Caller:
         target_rv = target()
         self.get_next_val = self._wrap_generator(target_rv)
         if self.get_next_val:
-            # Tartget is a callable that returned a generator.
+            # Target is a callable that returned a generator/iterator.
             return self.get_next_val()
         # Otherwise, target is just a callable that returns values
         self.get_next_val = target

@@ -6,7 +6,19 @@ logger = logging.getLogger(__name__)
 
 
 class TimerPacemaker:
-    """A helper object that controls the timers' iterations."""
+    """Async-iterable that yields once per `delay` seconds.
+
+    The first iteration fires immediately (no leading sleep) so the
+    target function runs at startup; subsequent iterations sleep for
+    `delay` before yielding.
+
+    Iteration ends — `StopAsyncIteration` is raised — when either
+    `stop()` is called explicitly or one of the awaitables registered
+    via `stop_on()` resolves.
+
+    `_reset()` is provided so a single instance can be re-used across
+    `Timer.start()` / `Timer.cancel()` cycles.
+    """
 
     delay: float
     _first_iter: bool = True
@@ -20,6 +32,14 @@ class TimerPacemaker:
         self._cancel_evt = asyncio.Event()
 
     def stop_on(self, aws: typing.Sequence[typing.Awaitable]):
+        """Register awaitables that, when any one resolves or raises,
+        will stop this pacemaker.
+
+        Requires a running event loop (uses `asyncio.ensure_future`).
+        The wrapped futures are tracked on `_cancel_futs` and cancelled
+        on `stop()`. Awaitables passed here are single-shot — they are
+        cleared on stop and not re-armed by `_reset()`.
+        """
         for el in aws:
             fut = asyncio.ensure_future(el)
             fut.add_done_callback(self._on_cancel_fut_done)
@@ -59,7 +79,7 @@ class TimerPacemaker:
             self._cancel_evt = asyncio.Event()
 
     def __aiter__(self):
-        """The core funtionality - return the iterator"""
+        """Return the iterator (this object is its own iterator)."""
         return self
 
     async def __anext__(self):
@@ -87,7 +107,7 @@ class TimerPacemaker:
         except asyncio.TimeoutError:
             # Sleep succeeded
             return None
-        # the cancel event was triggered if no timout was raised
+        # the cancel event was triggered if no timeout was raised
         assert self._cancel_evt.is_set()
-        # So, raise StopIteration
+        # Signal end-of-iteration to the consumer (`async for`).
         raise StopAsyncIteration()

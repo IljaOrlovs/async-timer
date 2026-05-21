@@ -4,7 +4,7 @@ The missing Python async timer.
 
 [![Tests](docs/badges/tests.svg)](docs/badges/tests.svg)
 [![Coverage](docs/badges/coverage.svg)](docs/badges/coverage.svg)
-[![CI](https://github.com/VRGhost/async-timer/actions/workflows/main.yml/badge.svg)](https://github.com/VRGhost/async-timer/actions/workflows/main.yml)
+[![CI](https://github.com/IljaOrlovs/async-timer/actions/workflows/main.yml/badge.svg)](https://github.com/IljaOrlovs/async-timer/actions/workflows/main.yml)
 
 Run something repeatedly on an interval in asyncio — useful for cache refresh, periodic polling, metrics emission, and similar background work.
 

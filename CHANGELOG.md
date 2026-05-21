@@ -114,7 +114,7 @@ Backwards-compatible overhaul. The basic
 - `mock_async_timer.MockTimer` — test-friendly Timer subclass that
   replaces real sleeps with an `AsyncMock`. ([#1])
 
-[#1]: https://github.com/VRGhost/async-timer/pull/1
+[#1]: https://github.com/IljaOrlovs/async-timer/pull/1
 
 ## [1.1.1] - 2024-01-23
 
@@ -161,17 +161,17 @@ Initial public release.
 
 First tagged release.
 
-[Unreleased]: https://github.com/VRGhost/async-timer/compare/v1.2.0...HEAD
-[1.2.0]: https://github.com/VRGhost/async-timer/compare/v1.1.6...v1.2.0
-[1.1.6]: https://github.com/VRGhost/async-timer/compare/v1.1.5...v1.1.6
-[1.1.5]: https://github.com/VRGhost/async-timer/compare/v1.1.4...v1.1.5
-[1.1.4]: https://github.com/VRGhost/async-timer/compare/v1.1.3...v1.1.4
-[1.1.3]: https://github.com/VRGhost/async-timer/compare/v1.1.2...v1.1.3
-[1.1.2]: https://github.com/VRGhost/async-timer/compare/v1.1.1...v1.1.2
-[1.1.1]: https://github.com/VRGhost/async-timer/compare/v1.1.0...v1.1.1
-[1.1.0]: https://github.com/VRGhost/async-timer/compare/v1.0.3...v1.1.0
-[1.0.3]: https://github.com/VRGhost/async-timer/compare/v1.0.2...v1.0.3
-[1.0.2]: https://github.com/VRGhost/async-timer/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/VRGhost/async-timer/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/VRGhost/async-timer/compare/v0.0.1...v1.0.0
-[0.0.1]: https://github.com/VRGhost/async-timer/releases/tag/v0.0.1
+[Unreleased]: https://github.com/IljaOrlovs/async-timer/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.6...v1.2.0
+[1.1.6]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.5...v1.1.6
+[1.1.5]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.4...v1.1.5
+[1.1.4]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.3...v1.1.4
+[1.1.3]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.2...v1.1.3
+[1.1.2]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.0.3...v1.1.0
+[1.0.3]: https://github.com/IljaOrlovs/async-timer/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/IljaOrlovs/async-timer/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/IljaOrlovs/async-timer/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/IljaOrlovs/async-timer/compare/v0.0.1...v1.0.0
+[0.0.1]: https://github.com/IljaOrlovs/async-timer/releases/tag/v0.0.1

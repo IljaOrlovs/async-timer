@@ -27,10 +27,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/VRGhost/async-timer"
-Source = "https://github.com/VRGhost/async-timer"
-Issues = "https://github.com/VRGhost/async-timer/issues"
-Changelog = "https://github.com/VRGhost/async-timer/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/IljaOrlovs/async-timer"
+Source = "https://github.com/IljaOrlovs/async-timer"
+Issues = "https://github.com/IljaOrlovs/async-timer/issues"
+Changelog = "https://github.com/IljaOrlovs/async-timer/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

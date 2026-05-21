@@ -128,7 +128,9 @@ class TestAsyncFunc:
         assert len(vals) > 10
         assert len(async_for_vals) > 10
         assert set(async_for_vals).issubset(vals)
-        assert not term_evt.is_set(), "The generator did not terminate"
+        # cancel_cb fires whenever the timer task ends — including the
+        # `__aexit__`-driven cancel that runs when we break out of the loop.
+        assert term_evt.is_set(), "cancel_cb fires on __aexit__ cleanup"
         assert not exc_evt.is_set(), "No exceptions"
 
     @pytest.mark.asyncio

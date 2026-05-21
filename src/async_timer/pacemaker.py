@@ -1,6 +1,9 @@
 import asyncio
 import dataclasses
+import logging
 import typing
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass()
@@ -25,16 +28,41 @@ class TimerPacemaker:
     def stop_on(self, aws: typing.Sequence[typing.Awaitable]):
         for el in aws:
             fut = asyncio.ensure_future(el)
-            fut.add_done_callback(lambda _fut: self.stop())
+            fut.add_done_callback(self._on_cancel_fut_done)
             self._cancel_futs.append(fut)
+
+    def _on_cancel_fut_done(self, fut: asyncio.Future):
+        # Consume any exception so asyncio does not emit
+        # "exception was never retrieved" warnings — but surface it
+        # via logging so it isn't silently swallowed.
+        if not fut.cancelled():
+            exc = fut.exception()
+            if exc is not None:
+                logger.warning(
+                    "cancel_aws awaitable %r raised %s; treating as stop signal",
+                    fut,
+                    exc,
+                    exc_info=exc,
+                )
+        self.stop()
 
     def stop(self):
         """Stop the iterator."""
-        for fut in self._cancel_futs:
-            fut.cancel()
-        self._cancel_futs.clear()
-        self._cancel_evt.set()
+        if not self._running:
+            return
         self._running = False
+        self._cancel_evt.set()
+        for fut in self._cancel_futs:
+            if not fut.done():
+                fut.cancel()
+        self._cancel_futs.clear()
+
+    def _reset(self):
+        """Reset state so the iterator can be re-used after stop()."""
+        self._first_iter = True
+        self._running = True
+        if self._cancel_evt.is_set():
+            self._cancel_evt = asyncio.Event()
 
     def __aiter__(self):
         """The core funtionality - return the iterator"""

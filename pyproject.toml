@@ -1,6 +1,6 @@
 [project]
 name = "async-timer"
-version = "0.0.0.dev0"
+dynamic = ["version"]
 description = "The missing Python async timer."
 authors = [
     {name = "Ilya O.", email = "vrghost@gmail.com"},

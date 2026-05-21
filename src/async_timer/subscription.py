@@ -213,12 +213,13 @@ class Subscription(typing.Generic[T]):
 
     def close(self) -> None:
         """Stop receiving ticks. Idempotent. Any pending iteration will
-        terminate cleanly on its next `__anext__`."""
+        terminate cleanly on its next `__anext__`.
+
+        After the first call, subsequent calls are no-ops — no duplicate
+        end-of-stream sentinel pushed, no extra unregister attempt.
+        """
         if self._closed:
-            # Still call the unregister hook in case close() was reached
-            # via a path that flipped `_closed` (e.g. _push_end) without
-            # unregistering — defensive idempotency.
-            pass
+            return
         self._closed = True
         if self._unregister is not None:
             unregister = self._unregister

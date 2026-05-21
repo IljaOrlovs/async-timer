@@ -86,7 +86,18 @@ async def test_subscription_close_is_idempotent():
     timer = async_timer.Timer(delay=10e-5, target=lambda: 1, start=True)
     sub = timer.subscribe()
     sub.close()
-    sub.close()  # second call must not raise
+    # Single end-of-stream sentinel sits in the queue after one close.
+    assert sub.qsize == 1
+    sub.close()  # second call must not raise AND must not push a duplicate
+    sub.close()  # ...nor a third
+    assert sub.qsize == 1, (
+        "close() should be a no-op on second call; got duplicate sentinels"
+    )
+    # And iteration terminates exactly once.
+    with pytest.raises(StopAsyncIteration):
+        await sub.__anext__()
+    # Queue now empty — no leftover sentinel from duplicate closes.
+    assert sub.qsize == 0
     await timer.cancel()
 
 

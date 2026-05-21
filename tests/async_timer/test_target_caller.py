@@ -1,11 +1,11 @@
 import pytest
 
-import async_timer.traget_caller as traget_caller
+import async_timer.target_caller as target_caller
 
 
 @pytest.mark.asyncio
 async def test_sync_fn(count_fn):
-    caller = traget_caller.Caller(target=count_fn)
+    caller = target_caller.Caller(target=count_fn)
 
     assert await caller.next() == 0
     assert await caller.next() == 1
@@ -14,7 +14,7 @@ async def test_sync_fn(count_fn):
 
 @pytest.mark.asyncio
 async def test_async_fn(async_count_fn):
-    caller = traget_caller.Caller(target=async_count_fn)
+    caller = target_caller.Caller(target=async_count_fn)
 
     assert await caller.next() == 0
     assert await caller.next() == 1
@@ -28,7 +28,7 @@ async def test_sync_gen_callable(count_gen, called):
         inp = count_gen()
     else:
         inp = count_gen
-    caller = traget_caller.Caller(target=inp)
+    caller = target_caller.Caller(target=inp)
 
     assert await caller.next() == 0
     assert await caller.next() == 1
@@ -42,7 +42,7 @@ async def test_async_gen_callable(async_gen, called):
         inp = async_gen()
     else:
         inp = async_gen
-    caller = traget_caller.Caller(target=inp)
+    caller = target_caller.Caller(target=inp)
 
     assert await caller.next() == 0
     assert await caller.next() == 1
@@ -56,7 +56,7 @@ async def test_iterable(count_iterable, called):
         inp = count_iterable()
     else:
         inp = count_iterable
-    caller = traget_caller.Caller(target=inp)
+    caller = target_caller.Caller(target=inp)
 
     assert await caller.next() == 0
     assert await caller.next() == 1

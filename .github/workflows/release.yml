@@ -11,22 +11,21 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write  # Required for PyPI OIDC trusted publishing
+      contents: read
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
-        uses: actions/setup-python@v4
-      - name: Install dependencies
-        run: |
-          python3 -m pip install --upgrade pip poetry
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # pdm-backend SCM versioning needs tag history
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v4
+        with:
+          python-version: '3.13'
       - name: Build packages
-        run: |
-          poetry version "${GITHUB_REF_NAME}"
-          poetry build
-      - name: Publish distribution to Test PyPI
-        run: |
-          poetry config pypi-token.test-pypi "${{ secrets.TEST_PYPI_API_TOKEN }}"
-          poetry publish -r test-pypi
-      - name: Publish distribution to PRODUCTION PyPI
-        run: |
-          poetry config pypi-token.pypi "${{ secrets.PYPI_API_TOKEN }}"
-          poetry publish
+        run: pdm build
+      - name: Publish to Test PyPI
+        run: pdm publish --no-build --repository https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        run: pdm publish --no-build

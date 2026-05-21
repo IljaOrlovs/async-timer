@@ -5,42 +5,53 @@ import async_timer
 
 
 class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
+    """Pacemaker that yields per loop-iter instead of sleeping.
+
+    `sleep` is an `AsyncMock` — tests can assert call args/counts.
+    Cancel/trigger are re-checked after each await so in-flight
+    signals take effect without producing an extra tick.
+    """
+
     sleep: unittest.mock.AsyncMock
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sleep = unittest.mock.AsyncMock(name="mock-timer-sleep")
 
-    async def _try_wait(self, delay: float):
+    async def _try_wait(self, delay: float) -> bool:
         if self._cancel_evt.is_set():
             raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return True
 
         await self._sleep_until_next_loop_iter()
+        if self._cancel_evt.is_set():
+            raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return True
+
         await self.sleep(delay)
+        if self._cancel_evt.is_set():
+            raise StopAsyncIteration()
+        if self._trigger_evt.is_set():
+            self._trigger_evt.clear()
+            return True
+        return False
 
     async def _sleep_until_next_loop_iter(self):
-        """Awaiting this function will release on the next async loop iteration"""
-        fut = asyncio.Future()
-        asyncio.get_event_loop().call_soon(lambda: fut.set_result(42))
+        """Yield to the scheduler for one loop iteration."""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        loop.call_soon(lambda: fut.set_result(42))
         await fut
-
-    @classmethod
-    def fromPacemaker(cls, original: async_timer.pacemaker.TimerPacemaker):
-        """Create MockPacemaker from the non-mock original."""
-        out = cls(delay=original.delay)
-        out.stop_on(original._cancel_futs)
-        return out
 
 
 class MockTimer(async_timer.Timer):
-    """Test-friendly mock timer class.
-
-    The main difference is that it is using test-friendly pacemaker
-        that doesn't sleep.
-    """
+    """Timer subclass using `MockPacemaker` — no real sleeps. Full Timer API."""
 
     pacemaker: MockPacemaker
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pacemaker = MockPacemaker.fromPacemaker(self.pacemaker)
+    def _create_pacemaker(self, delay: float, **kwargs) -> MockPacemaker:
+        return MockPacemaker(delay, **kwargs)

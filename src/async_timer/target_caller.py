@@ -1,16 +1,33 @@
-"""This module is responsible for the magic behaviour calling the `target` function."""
+"""Target-call dispatch for `Timer`.
+
+Accepts any of: plain callable (sync or async), generator/async
+generator function, iterator/generator/async-generator object, or
+callable returning one of those. The `Caller` introspects on the
+first tick and re-uses the dispatch on subsequent ticks. `reset()`
+re-runs introspection (used by `Timer.start()` for restart).
+"""
 
 import inspect
+import typing
 from collections.abc import Iterator
 
+T = typing.TypeVar("T")
 
-class Caller:
-    target = None
-    get_next_val = None
+
+class Caller(typing.Generic[T]):
+    """Normalises target shape; calls once per tick."""
+
+    target: typing.Any
+    get_next_val: typing.Optional[typing.Callable[[], typing.Any]] = None
     first_call: bool = True
 
     def __init__(self, target):
         self.target = target
+
+    def reset(self):
+        """Re-introspect the target on next call (used on restart)."""
+        self.get_next_val = None
+        self.first_call = True
 
     def _wrap_generator(self, maybe_gen):
         if inspect.isgenerator(maybe_gen):
@@ -36,35 +53,30 @@ class Caller:
         return gen_next_val
 
     def _setup(self, target):
-        """Configure `get_next_val` to return next value.
-
-        Return the first such next value.
-        """
+        """Pick a dispatch mode and return the first value."""
         self.get_next_val = self._wrap_generator(target)
         if self.get_next_val:
-            # `target` is a generator and we now have the
-            # `get_next_val`
-            return self.get_next_val()
-        assert callable(target), "Otherwise target must be callable"
+            return self.get_next_val()  # target *is* an iterator
+        assert callable(target), "target must be callable"
         target_rv = target()
         self.get_next_val = self._wrap_generator(target_rv)
         if self.get_next_val:
-            # Tartget is a callable that returned a generator.
-            return self.get_next_val()
-        # Otherwise, target is just a callable that returns values
+            return self.get_next_val()  # callable returned an iterator
+        # Plain callable returning a value each call.
         self.get_next_val = target
         return target_rv
 
-    async def next(self):
-        """Call `target` one more time."""
+    async def next(self) -> T:
+        """Call `target` once."""
         try:
             if self.first_call:
                 rv = self._setup(self.target)
                 self.first_call = False
             else:
+                assert self.get_next_val is not None
                 rv = self.get_next_val()
         except StopIteration as _err:
             raise StopAsyncIteration() from _err
         if inspect.isawaitable(rv):
             rv = await rv
-        return rv
+        return typing.cast(T, rv)

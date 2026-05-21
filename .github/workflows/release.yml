@@ -17,14 +17,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # pdm-backend SCM versioning needs tag history
       - name: Setup PDM
         uses: pdm-project/setup-pdm@v4
         with:
           python-version: '3.13'
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
       - name: Build packages
         run: pdm build
       - name: Publish to Test PyPI

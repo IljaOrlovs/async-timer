@@ -44,6 +44,14 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.version]
+source = "scm"
+# Tags look like `v1.2.3` — strip the leading `v` for PEP 440 compliance.
+tag_regex = '^v(?P<version>\d+\.\d+\.\d+.*)$'
+# When building outside a tagged commit (CI on main, local dev), fall back
+# to this so the build still succeeds.
+fallback_version = "0.0.0.dev0"
+
 [tool.pdm.build]
 package-dir = "src"
 includes = ["src/async_timer", "src/mock_async_timer"]

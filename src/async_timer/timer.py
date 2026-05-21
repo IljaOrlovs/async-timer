@@ -44,9 +44,11 @@ import asyncio
 import logging
 import time
 import typing
+import weakref
 
 import async_timer
 from async_timer.pacemaker import PacemakerMode
+from async_timer.subscription import Subscription
 
 logger = logging.getLogger(__name__)
 T = typing.TypeVar("T")
@@ -170,6 +172,12 @@ class Timer(typing.Generic[T]):
     cancel_callback: TimerCallbackT[T]
     last_result: typing.Optional[T] = None
     last_tick_at: typing.Optional[float] = None  # time.monotonic() of last tick
+    # Subscriptions registered via `subscribe()` — each gets every tick
+    # pushed to its own queue (independent of the single-shot fanout).
+    # WeakSet: if the caller drops their reference to a Subscription
+    # without closing it, GC reaps it and it disappears from this set
+    # automatically — no memory leak via accumulating dead subscriptions.
+    _subscriptions: "weakref.WeakSet[Subscription[T]]"
 
     def __init__(
         self,
@@ -228,6 +236,7 @@ class Timer(typing.Generic[T]):
         )
         self.target_caller = async_timer.target_caller.Caller[T](target)
         self.result_fanout = FanoutRv()
+        self._subscriptions = weakref.WeakSet()
         self.exception_callback = exc_cb
         self.cancel_callback = cancel_cb
         # cancel_aws are single-shot awaitables — track whether the user
@@ -404,17 +413,76 @@ class Timer(typing.Generic[T]):
                     break
                 except Exception as err:
                     self.result_fanout.send_exception(err)
+                    # Snapshot before iteration: WeakSet entries can
+                    # disappear mid-loop if the subscriber is GC'd.
+                    for sub in list(self._subscriptions):
+                        sub._push_exception(err)
                     self.exception_callback(self, self.target_caller.target)
                     break
                 else:
                     self.last_result = rv
                     self.last_tick_at = time.monotonic()
                     self.result_fanout.send_result(rv)
+                    for sub in list(self._subscriptions):
+                        sub._push_value(rv)
                 self.hit_count += 1
         finally:
             # Main loop finished - cancel all watchers
             self.result_fanout.cancel()
+            # Signal end-of-stream to any subscriptions that didn't
+            # already see an exception (those got it pushed above).
+            # We snapshot the list because _push_end → close → unregister
+            # may mutate it.
+            for sub in list(self._subscriptions):
+                sub._push_end()
+            self._subscriptions.clear()
             self.cancel_callback(self, self.target_caller.target)
+
+    def subscribe(
+        self,
+        maxsize: int = 0,
+        *,
+        name: typing.Optional[str] = None,
+    ) -> "Subscription[T]":
+        """Open a buffered per-consumer feed of every subsequent tick.
+
+        Unlike `join()` / `wait()` / `async for self`, a Subscription
+        does NOT drop intermediate ticks when the consumer is slow —
+        each subscriber owns its own queue. Use this when you need to
+        process every tick (logging, metrics, event dispatch).
+
+        Parameters:
+            `maxsize` - underlying queue bound. 0 (default) is unbounded.
+                If positive and the queue fills up, the oldest buffered
+                tick is dropped to make room and a warning is logged.
+            `name` - optional identifier used in the drop-warning log.
+
+        Returns:
+            A `Subscription` instance — an async context manager that
+            yields the same object (for `async with` ergonomics) and
+            also an async iterator over tick values.
+
+        Usage:
+
+            async with timer.subscribe() as feed:
+                async for value in feed:
+                    await process(value)
+
+        The subscription receives every tick from the moment of
+        subscribe() until it is closed (via `async with` exit, an
+        explicit `close()`, or the upstream timer ending). If the
+        upstream timer's target raises, the subscriber sees the
+        exception re-raised from `__anext__` (consumers learn about
+        failures rather than silently exiting).
+        """
+        sub: Subscription[T] = Subscription(maxsize=maxsize, name=name)
+        sub._unregister = self._unsubscribe
+        self._subscriptions.add(sub)
+        return sub
+
+    def _unsubscribe(self, sub: "Subscription[T]") -> None:
+        # discard() is no-op if absent (GC-reaped, double-close, etc.)
+        self._subscriptions.discard(sub)
 
     async def trigger(self) -> T:
         """Fire the target now, then resume the regular schedule.

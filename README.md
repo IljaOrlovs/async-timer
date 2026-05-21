@@ -22,7 +22,9 @@ This package is particularly useful for tasks like automatically updating caches
   * Synchronous generators
   * Asynchronous generators
 * **Wait for the Next Tick**: You can set it up so your program waits for the timer to do its thing, and then continues. `await timer.wait(hits=N, timeout=T)` raises on timeout when waiting for a specific number of ticks; `await timer.wait(timeout=T)` (no hit condition) is a bounded *idle* wait that returns the last seen value without raising — useful for "let the timer settle, but don't hang forever" patterns.
-* **Single-shot broadcast delivery**: each tick's result is delivered to every consumer currently awaiting (`join()` / `async for` / `wait()`) at the moment the tick fires, and then discarded. A consumer that's busy when a tick fires will *not* see that tick — it will see the next one. This matches "refresh a cache periodically" semantics. If you need every-tick delivery instead, push from `target` into an `asyncio.Queue` and consume the queue.
+* **Two delivery models**:
+    * **Single-shot broadcast** (default — via `join()` / `async for self` / `wait()`): each tick is delivered to every consumer currently awaiting *at the moment the tick fires*, then discarded. A consumer that's busy when a tick fires will not see that tick. Use this for "refresh a cache periodically" semantics.
+    * **Buffered per-subscriber queue** (via `timer.subscribe()`): each subscriber gets its own queue; sees every tick from subscribe-time. Optional `maxsize=N` bounds the queue (drops oldest + logs when full). Use this when you need to process every tick (logging, metrics, event dispatch).
 * **Keep Getting Updates**: You can use it in a loop to keep getting updates every time the timer goes off.
 * **Cancel anytime**: The timer object can be stopped at any time either explicitly by calling `stop()`/`cancel()` method OR it can stop automatically on an awaitable resolving (the `cancel_aws` constructor argument). `await cancel()` waits for cleanup to complete before returning, and is safe to call from inside the target or its callbacks.
 * **Restartable**: Calling `start()` after `cancel()` resumes the timer with fresh pacemaker, fanout, and target-caller state (generator targets get a fresh generator). Restart is rejected with a clear error if the original construction used `cancel_aws`, since those awaitables are single-shot.
@@ -168,29 +170,65 @@ def get_cached_value():
     return refresh_db.last_result  # `None` until the first tick fires
 ```
 
-### When you need every tick (queue pattern)
+### When you need every tick (`subscribe`)
 
-`Timer`'s built-in delivery is single-shot fan-out: a slow consumer
-misses intermediate ticks. If you need to process **every** tick (e.g.
-log every measurement, dispatch every event), have the target push to
-an `asyncio.Queue` and consume the queue at your own pace:
+`Timer`'s default delivery (`join()` / `async for self`) is single-shot
+fan-out: a slow consumer misses intermediate ticks. When you need to
+process **every** tick, use `timer.subscribe()` — each subscription gets
+its own buffered queue:
 
 ```python
 import asyncio
 import async_timer
 
-queue: asyncio.Queue[int] = asyncio.Queue()
-counter = 0
-
-async def produce():
-    global counter
-    counter += 1
-    await queue.put(counter)
+async def measure():
+    return await fetch_metric()
 
 async def main():
-    async with async_timer.Timer(1.0, target=produce):
-        while True:
-            value = await queue.get()
-            print(f"got tick {value}")  # never misses one
-            await asyncio.sleep(2.0)    # even though consumer is slow
+    timer = async_timer.Timer(1.0, target=measure, start=True)
+    async with timer.subscribe() as feed:
+        async for value in feed:
+            await log_it(value)        # never misses a tick from subscribe-time
+            await asyncio.sleep(3.0)    # even though the consumer is 3x slower
 ```
+
+For long-running consumers where you'd rather drop old buffered values
+than grow memory:
+
+```python
+# Keep at most 10 buffered ticks; drop oldest + log warning when full.
+async with timer.subscribe(maxsize=10, name="metrics-sink") as feed:
+    async for value in feed:
+        await slow_export(value)
+```
+
+Multiple subscribers each get an independent copy:
+
+```python
+async with timer.subscribe() as a, timer.subscribe() as b:
+    # Both `a` and `b` see every tick produced by `timer`.
+    ...
+```
+
+Slow consumers can monitor `feed.qsize` and shed load explicitly via
+`feed.drop_oldest(n=1)` — useful when the right policy isn't
+"drop newest when bounded queue fills" but something app-specific
+like "if backlog > 100, jump to the most recent value":
+
+```python
+async with timer.subscribe() as feed:
+    async for value in feed:
+        if feed.qsize > 100:
+            # We're way behind — drop everything but the newest entry.
+            feed.drop_oldest(feed.qsize - 1)
+            log.warning("metrics consumer fell behind, shed %d ticks",
+                        feed.dropped_count)
+        await slow_export(value)
+```
+
+`drop_oldest()` stops at end-of-stream / exception sentinels, so it
+will never swallow a stream-termination signal.
+
+If the timer's `target` raises, the exception is re-raised from the
+subscriber's iteration — consumers learn about failures rather than
+silently exiting.

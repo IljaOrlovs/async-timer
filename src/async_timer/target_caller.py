@@ -13,6 +13,16 @@ class Caller:
     def __init__(self, target):
         self.target = target
 
+    def reset(self):
+        """Reset dispatch state so the original `target` is re-introspected.
+
+        Used by Timer.start() after a previous run, so that a target which
+        is (or returns) a generator gets a fresh generator on restart
+        instead of reusing the exhausted one.
+        """
+        self.get_next_val = None
+        self.first_call = True
+
     def _wrap_generator(self, maybe_gen):
         if inspect.isgenerator(maybe_gen):
 

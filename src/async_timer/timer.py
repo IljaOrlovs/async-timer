@@ -21,12 +21,12 @@ TimerCallbackT = typing.Callable[["Timer[T]", TimerMainTaskT[T]], None]
 
 
 class FanoutRv(typing.Generic[T]):
-    """An object that shares a result actoss all waiters.
+    """An object that shares a result across all waiters.
 
-    All mutating operations are synchronous under the hood
-    (set_result / set_exception / cancel on futures are non-blocking,
-    list append/clear are atomic in CPython). The methods are coroutines
-    only to preserve the existing call-site shape.
+    All mutating operations are synchronous: `set_result`/`set_exception`/
+    `cancel` on futures are non-blocking and list append/clear are atomic
+    in CPython. Only `wait()` is a coroutine — it returns a future that
+    callers await for the next posted result.
     """
 
     futures: typing.List[asyncio.Future]
@@ -44,19 +44,19 @@ class FanoutRv(typing.Generic[T]):
         self.futures.append(future)
         return await future
 
-    async def send_result(self, result: T):
+    def send_result(self, result: T):
         for future in self.futures:
             if not future.done():
                 future.set_result(result)
         self.futures.clear()
 
-    async def send_exception(self, exc: BaseException):
+    def send_exception(self, exc: BaseException):
         for future in self.futures:
             if not future.done():
                 future.set_exception(exc)
         self.futures.clear()
 
-    async def cancel(self):
+    def cancel(self):
         self._closed = True
         for future in self.futures:
             if not future.done():
@@ -109,14 +109,20 @@ class Timer(typing.Generic[T]):
         self.result_fanout = FanoutRv()
         self.exception_callback = exc_cb
         self.cancel_callback = cancel_cb
+        # cancel_aws are single-shot awaitables — track whether the user
+        # passed any so we can fail loudly on restart instead of silently
+        # losing them.
+        self._had_cancel_aws: bool = bool(cancel_aws)
+        # Separate from main_task (which `cancel()` clears) — survives
+        # across cancel/restart cycles so start() can detect "this is a
+        # restart, not the first run".
+        self._has_been_started: bool = False
         if cancel_aws:
             self.pacemaker.stop_on(list(cancel_aws))
         if start:
             self.start()
 
-    def _create_pacemaker(
-        self, delay: float
-    ) -> "async_timer.pacemaker.TimerPacemaker":
+    def _create_pacemaker(self, delay: float) -> "async_timer.pacemaker.TimerPacemaker":
         """Hook for subclasses that need a different pacemaker class."""
         return async_timer.pacemaker.TimerPacemaker(delay)
 
@@ -133,14 +139,26 @@ class Timer(typing.Generic[T]):
         """Schedule the timer to run.
 
         Calling start() after cancel() restarts the timer with fresh
-        pacemaker/fanout state.
+        pacemaker, fanout, and target-caller state. Raises RuntimeError
+        on restart if the original construction used `cancel_aws`, since
+        those awaitables are single-shot and would be silently lost.
         """
         if self.is_running():
             raise RuntimeError("Already running")
+        is_restart = self._has_been_started
+        if is_restart and self._had_cancel_aws:
+            raise RuntimeError(
+                "Cannot restart a Timer that was constructed with "
+                "cancel_aws: those awaitables are single-shot and have "
+                "already been consumed. Construct a new Timer instead."
+            )
         self.pacemaker._reset()
         self.result_fanout = FanoutRv()
+        if is_restart:
+            self.target_caller.reset()
         loop = asyncio.get_running_loop()  # there MUST be a running loop
         self.main_task = loop.create_task(self._loop_callback_routine())
+        self._has_been_started = True
 
     def is_running(self) -> bool:
         """Return `True` if the timer is currently scheduled"""
@@ -226,15 +244,15 @@ class Timer(typing.Generic[T]):
                 except StopAsyncIteration:
                     break
                 except Exception as err:
-                    await self.result_fanout.send_exception(err)
+                    self.result_fanout.send_exception(err)
                     self.exception_callback(self, self.target_caller.target)
                     break
                 else:
-                    await self.result_fanout.send_result(rv)
+                    self.result_fanout.send_result(rv)
                 self.hit_count += 1
         finally:
             # Main loop finished - cancel all watchers
-            await self.result_fanout.cancel()
+            self.result_fanout.cancel()
             self.cancel_callback(self, self.target_caller.target)
 
     async def cancel(self):
@@ -242,6 +260,10 @@ class Timer(typing.Generic[T]):
 
         Awaits the underlying task so that by the time this returns,
         the cancel callback has fired and waiters have been resolved.
+
+        Safe to call from inside `cancel_cb`, `exc_cb`, or the target
+        itself — in that case the awaiting-the-task step is skipped
+        (it would deadlock on `current_task`).
         """
         if not self.main_task:
             return
@@ -249,6 +271,11 @@ class Timer(typing.Generic[T]):
         self.main_task = None
         self.pacemaker.stop()
         task.cancel()
+        if asyncio.current_task() is task:
+            # Self-cancel from inside the timer's own task — cannot await
+            # ourselves. The cancellation has been scheduled; the task's
+            # own `finally` will run cleanup on the next yield.
+            return
         try:
             await task
         except BaseException:

@@ -1,14 +1,8 @@
 import asyncio
-import dataclasses
 import logging
 import typing
 
 logger = logging.getLogger(__name__)
-
-
-@dataclasses.dataclass()
-class ConfigurationChanged:
-    """An internal object that is returned when internal pacemaker state has changed"""
 
 
 class TimerPacemaker:

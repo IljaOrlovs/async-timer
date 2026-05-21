@@ -24,7 +24,12 @@ jobs:
         with:
           python-version: '3.13'
       - name: Build packages
-        run: pdm build
+        # Pin the version explicitly from the tag. Bypasses pdm-backend's
+        # SCM dirty-tree detection, which can append a PEP-440 local
+        # segment (e.g. `+d20260521`) that PyPI rejects with 400.
+        run: |
+          export PDM_BUILD_SCM_VERSION="${GITHUB_REF_NAME#v}"
+          pdm build
       - name: Publish to Test PyPI
         run: pdm publish --no-build --repository https://test.pypi.org/legacy/
       - name: Publish to PyPI

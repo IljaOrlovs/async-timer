@@ -49,6 +49,9 @@ class Subscription(typing.Generic[T]):
     _name: typing.Optional[str]
     # Cleanup hook set by Timer.subscribe; cleared after first invocation.
     _unregister: typing.Optional[typing.Callable[["Subscription[T]"], None]]
+    # Bound by Timer when the owning timer has a running loop. Used by
+    # close_threadsafe() to marshal sync close from non-loop threads.
+    _loop: typing.Optional[asyncio.AbstractEventLoop]
     # Counts both producer-side (queue-full) and consumer-side (drop_oldest) drops.
     dropped_count: int
 
@@ -65,6 +68,7 @@ class Subscription(typing.Generic[T]):
         self._closed = False
         self._name = name
         self._unregister = None
+        self._loop = None
         self.dropped_count = 0
 
     # ------------------------------------------------------------------
@@ -174,6 +178,27 @@ class Subscription(typing.Generic[T]):
             except asyncio.QueueEmpty:
                 pass
             self._queue.put_nowait(_STREAM_END)
+
+    def close_threadsafe(self) -> None:
+        """Thread-safe `close()`. Marshals to the owning timer's loop.
+
+        If the subscription was never associated with a running timer
+        (no loop bound), falls back to a direct `close()`. If called
+        from the loop's own thread, calls `close()` directly.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # No live loop to marshal to — close directly.
+            self.close()
+            return
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+        if current is loop:
+            self.close()
+            return
+        loop.call_soon_threadsafe(self.close)
 
     async def __aenter__(self) -> "Subscription[T]":
         return self

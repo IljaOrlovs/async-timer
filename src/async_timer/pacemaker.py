@@ -47,6 +47,8 @@ class TimerPacemaker:
         initial_delay: float = 0.0,
         jitter: float = 0.0,
     ):
+        if delay < 0:
+            raise ValueError(f"delay must be >= 0, got {delay!r}")
         if jitter < 0 or jitter > 1:
             raise ValueError(f"jitter must be in [0, 1], got {jitter!r}")
         if initial_delay < 0:

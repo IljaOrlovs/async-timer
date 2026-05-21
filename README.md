@@ -179,3 +179,39 @@ async with timer.subscribe() as feed:
 ```
 
 `drop_oldest()` never swallows end-of-stream / exception sentinels. Target exceptions re-raise from the subscriber's iteration.
+
+## Thread safety
+
+A `Timer` runs in a single asyncio event loop. Most state-mutating
+operations must be called from the loop's thread. The following are
+explicitly safe to use from any thread:
+
+**Read-only attributes** (atomic under CPython's GIL):
+
+* `timer.last_result`, `timer.last_tick_at`, `timer.hit_count`
+* `timer.is_running()`, `timer.delay`, `timer.name`
+* `subscription.qsize`, `subscription.dropped_count`
+
+**`set_delay(new_delay)`** is a single attribute write — safe from any
+thread; takes effect on the next sleep.
+
+**Cross-thread control methods** — marshal the operation back to the
+timer's loop and block for completion:
+
+```python
+# From a sync REST handler, signal handler, worker thread, etc.:
+timer.cancel_threadsafe(timeout=5.0)        # raises TimeoutError if exceeded
+result = timer.trigger_threadsafe(timeout=5.0)
+feed.close_threadsafe()
+```
+
+These raise `RuntimeError` with a clear message if called from the
+timer's own loop thread (use `await cancel()` / `await trigger()`
+instead), or if the timer has not been started yet, or if the bound
+event loop has been closed.
+
+Anything else (`subscribe()`, awaiting `join()` / `wait()`, iterating
+`async for` over the timer or a subscription, reading from a
+subscription queue) must happen on the loop's thread. From other
+threads, use `asyncio.run_coroutine_threadsafe(coro, loop)` to
+dispatch.

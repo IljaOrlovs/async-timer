@@ -29,5 +29,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pdm install
+      - name: Lint (ruff check)
+        run: pdm run ruff check ./src ./tests
+      - name: Format check (ruff format)
+        run: pdm run ruff format --check ./src ./tests
+      - name: Type check (pyright)
+        run: pdm run pyright
       - name: Test Python code
         run: pdm run pytest

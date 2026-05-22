@@ -30,15 +30,22 @@ jobs:
         run: |
           export PDM_BUILD_SCM_VERSION="${GITHUB_REF_NAME#v}"
           pdm build
+      - name: Sign artifacts with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.0.1
+        with:
+          inputs: |
+            ./dist/*.whl
+            ./dist/*.tar.gz
       - name: Publish to Test PyPI
-        run: pdm publish --no-build --repository https://test.pypi.org/legacy/
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # The action re-signs internally; the explicit Sigstore step
+          # above remains the source of truth for the .sigstore bundles
+          # attached to the GitHub Release.
       - name: Publish to PyPI
-        run: pdm publish --no-build
+        uses: pypa/gh-action-pypi-publish@release/v1
       - name: Extract release notes from CHANGELOG
-        # Pulls the section under `## [<version>] - <date>` from
-        # CHANGELOG.md so the GitHub Release body matches what's already
-        # documented. Falls back to a minimal note if the entry is
-        # missing (e.g. a hotfix tag landed without a CHANGELOG bump).
         id: changelog
         uses: mindsers/changelog-reader-action@v2
         with:
@@ -47,10 +54,6 @@ jobs:
           path: ./CHANGELOG.md
         continue-on-error: true
       - name: Create GitHub Release
-        # Runs after PyPI succeeds so a published release on GitHub
-        # always corresponds to a real PyPI version. The wheel + sdist
-        # built above are attached as release assets, giving users a
-        # checksummable artifact independent of PyPI.
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
@@ -62,4 +65,5 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
+            dist/*.sigstore
           fail_on_unmatched_files: true

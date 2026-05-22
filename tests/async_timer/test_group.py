@@ -466,6 +466,102 @@ async def test_group_cancel_threadsafe_from_worker_thread():
     assert not group.is_running()
 
 
+# ---------------------------------------------------------------------
+# Defensive paths
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_aenter_partial_failure_cancels_started_members():
+    """`async with` path: if a later start() raises, earlier members
+    are awaited-cancelled before the exception propagates."""
+    t_good = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t_bad = async_timer.Timer(delay=10e-5, target=lambda: 1)
+
+    def boom():
+        raise RuntimeError("intentional aenter failure")
+
+    t_bad.start = boom  # type: ignore[method-assign]
+
+    group = async_timer.TimerGroup([t_good, t_bad])
+    with pytest.raises(RuntimeError, match="intentional aenter failure"):
+        async with group:
+            pytest.fail("body should not run")  # pragma: no cover
+    assert group._active is False
+    assert not t_good.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_start_partial_failure_cancels_started_members():
+    """If a later member's start() raises, the earlier ones get cleaned up."""
+    t_good = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t_bad = async_timer.Timer(delay=10e-5, target=lambda: 1)
+
+    def boom():
+        raise RuntimeError("intentional start failure")
+
+    t_bad.start = boom  # type: ignore[method-assign]
+
+    group = async_timer.TimerGroup([t_good, t_bad])
+    with pytest.raises(RuntimeError, match="intentional start failure"):
+        group.start()
+    # State rolled back.
+    assert group._active is False
+    # The scheduled cancel for t_good runs on the next loop turn.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not t_good.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_rejects_closed_loop():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    group = async_timer.TimerGroup([t])
+    # Bind a loop that we then close, without going through start().
+    dead_loop = asyncio.new_event_loop()
+    dead_loop.close()
+    group._loop = dead_loop
+    with pytest.raises(RuntimeError, match="event loop is closed"):
+        group.cancel_threadsafe()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_timeout_raises_TimeoutError():
+    import threading
+
+    # A timer whose cancel() awaits forever — forces the threadsafe
+    # call to hit its timeout.
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t.start()
+
+    async def _stuck_cancel():
+        await asyncio.sleep(60)
+
+    t.cancel = _stuck_cancel  # type: ignore[method-assign]
+    group = async_timer.TimerGroup([t])
+    group._loop = asyncio.get_running_loop()
+    group._active = True
+
+    raised: list = []
+
+    def worker():
+        try:
+            group.cancel_threadsafe(timeout=0.05)
+        except TimeoutError as e:
+            raised.append(e)
+
+    th = threading.Thread(target=worker)
+    th.start()
+    while th.is_alive():
+        await asyncio.sleep(0.01)
+    th.join()
+    assert raised and "did not complete within" in str(raised[0])
+
+    # Cleanup: restore real cancel so the timer actually stops at test end.
+    del t.cancel
+    await t.cancel()
+
+
 @pytest.mark.asyncio
 async def test_group_wait_lifespan_warmup_pattern():
     """The headline use case: warm a set of caches before serving."""

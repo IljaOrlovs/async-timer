@@ -1,0 +1,115 @@
+# async-timer
+
+> The missing Python async timer. Recurring async calls in asyncio with
+> proper lifecycle, two delivery models (latest-value fanout and
+> per-consumer buffered subscriptions), fixed-rate / fixed-delay
+> scheduling, jitter, on-demand triggering, and cross-thread control.
+> Zero runtime dependencies. Python 3.9+.
+
+`async-timer` solves the problem behind code like:
+
+```python
+while True:
+    await do_the_thing()
+    await asyncio.sleep(5)
+```
+
+That naive loop drifts, has no graceful cancellation story, no way to
+gate startup on the first successful tick, and no way for other tasks
+to consume results. `async-timer` is what you actually want:
+
+```python
+import async_timer
+
+async with async_timer.Timer(delay=5, target=refresh_db) as timer:
+    await timer.wait(hit_count=1)   # block until first successful refresh
+    # ...serve traffic; timer keeps refreshing in the background
+```
+
+## When to use this library
+
+- Periodic refresh of in-memory caches in an asyncio app (FastAPI,
+  Starlette, aiohttp, etc.)
+- Metrics sampling on a stable wall-clock cadence
+- Heartbeats (e.g. Redis liveness keys with TTL)
+- Polling external state on an interval
+- Any recurring async call that needs proper cancellation, startup
+  gating, or fan-out to consumers
+
+## When NOT to use this library
+
+- Cron-style wall-clock scheduling ("every Monday at 09:00") — use
+  APScheduler or aiocron
+- Background *jobs* with retries, persistence, queues — use arq,
+  dramatiq, or Celery
+- Cross-process / cross-machine recurring tasks — use a scheduler +
+  broker (Celery beat, arq cron)
+- One-shot delayed call — use `asyncio.get_event_loop().call_later`
+
+## Core API
+
+- [`async_timer.Timer(delay, target)`](src/async_timer/timer.py) —
+  the main class. `start()` / `join()` / `wait(hit_count=N)` /
+  `cancel()`. Async context manager + async iterator.
+- [`@async_timer.every(5)`](src/async_timer/decorators.py) —
+  decorator that wraps a function into a Timer; original on `.func`.
+- [`async_timer.TimerGroup()`](src/async_timer/group.py) — start,
+  cancel, wait, and trigger a set of timers together.
+- [`timer.subscribe(maxsize=0)`](src/async_timer/subscription.py) —
+  per-consumer buffered feed; doesn't drop intermediate ticks.
+
+## Key features
+
+- **Two delivery models:** `join()` / `wait()` / `async for timer` is
+  single-shot latest-value fanout. `subscribe()` gives each consumer a
+  buffered queue that doesn't drop intermediate ticks.
+- **Scheduling modes:** `fixed_delay` (next tick fires `delay` after
+  the previous one *finishes*) or `fixed_rate` (anchored to wall
+  clock; missed slots skipped + logged).
+- **Cross-thread control:** `cancel_threadsafe()`, `trigger_threadsafe()`,
+  `subscription.close_threadsafe()` for signal handlers, sync REST
+  endpoints, and worker threads.
+- **Restartable:** `start()` after `cancel()` works.
+- **Test-friendly:** [`mock_async_timer.MockTimer`](src/mock_async_timer/timer.py)
+  replaces real sleeps with an `AsyncMock`.
+
+## Documentation
+
+- [README](README.md): full feature list, examples, thread-safety
+  semantics, comparison with other libraries
+- [Recipes](docs/recipes/): narrative walk-throughs explaining the *why*
+  behind each pattern
+  - [FastAPI lifespan: warm a cache before serving](docs/recipes/fastapi.md)
+  - [Starlette lifespan](docs/recipes/starlette.md)
+  - [aiohttp cleanup context](docs/recipes/aiohttp.md)
+  - [Prometheus periodic metric sampling](docs/recipes/prometheus.md)
+  - [Redis heartbeat with TTL](docs/recipes/redis_heartbeat.md)
+  - [Graceful shutdown on SIGTERM/SIGINT](docs/recipes/graceful_shutdown.md)
+- [CHANGELOG](CHANGELOG.md)
+
+## Runnable examples
+
+Self-contained scripts under [`examples/`](examples/):
+
+- [`fastapi_lifespan.py`](examples/fastapi_lifespan.py) — cache warmup
+  before the app accepts requests
+- [`fastapi_multi_cache_warmup.py`](examples/fastapi_multi_cache_warmup.py) —
+  `TimerGroup.wait(hit_count=1)` to warm several caches with one await
+- [`cache_invalidate_all.py`](examples/cache_invalidate_all.py) —
+  `TimerGroup.trigger()` for an admin "refresh all caches" endpoint
+- [`starlette_lifespan.py`](examples/starlette_lifespan.py)
+- [`aiohttp_cleanup_ctx.py`](examples/aiohttp_cleanup_ctx.py)
+- [`prometheus_metrics.py`](examples/prometheus_metrics.py) —
+  fixed-rate sampling with `TimerGroup`
+- [`redis_heartbeat.py`](examples/redis_heartbeat.py) — liveness key
+  with TTL
+- [`graceful_sigterm.py`](examples/graceful_sigterm.py) — clean
+  shutdown from SIGTERM/SIGINT
+
+## Project
+
+- License: MIT
+- Issues: https://github.com/IljaOrlovs/async-timer/issues
+- PyPI: https://pypi.org/project/async-timer/
+- Python: 3.9, 3.10, 3.11, 3.12, 3.13
+- Status: production-stable, 214 tests, 100% line coverage

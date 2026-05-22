@@ -53,6 +53,28 @@ async with timer.subscribe() as feed:
         await broadcast(snapshot)
 ```
 
+## Warming several caches at once
+
+When startup depends on more than one cache, switch to `TimerGroup` and
+its `wait()`:
+
+```python
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    async with async_timer.TimerGroup() as group:
+        group.add(async_timer.Timer(5, target=refresh_db, name="db"))
+        group.add(async_timer.Timer(30, target=refresh_flags, name="flags"))
+        group.add(async_timer.Timer(60, target=refresh_pricing, name="pricing"))
+        await group.wait(hit_count=1)   # AND across all members
+        yield
+```
+
+`group.wait(hit_count=1)` blocks until *every* member has produced at
+least one tick, so no request can land while any cache is still empty.
+
 ## Runnable version
 
-See [`examples/fastapi_lifespan.py`](../../examples/fastapi_lifespan.py).
+See [`examples/fastapi_lifespan.py`](../../examples/fastapi_lifespan.py)
+for the single-timer pattern, and
+[`examples/fastapi_multi_cache_warmup.py`](../../examples/fastapi_multi_cache_warmup.py)
+for the `TimerGroup.wait()` version.

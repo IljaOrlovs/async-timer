@@ -185,11 +185,32 @@ async def main():
 import async_timer
 
 async def lifespan():
-    async with async_timer.TimerGroup() as group:
+    async with async_timer.TimerGroup(name="caches") as group:
         group.add(async_timer.Timer(5, target=refresh_db))
         group.add(async_timer.Timer(60, target=prune_cache))
+        # Block until every cache has been populated at least once,
+        # then serve traffic.
+        await group.wait(hit_count=1)
         yield   # both running; both cancelled on exit
 ```
+
+`TimerGroup` mirrors `Timer`'s surface across a set of timers; each
+group method fans out to its members (AND-combined) and returns
+`[(timer, rv), ...]` in iteration order:
+
+* `group.wait(hit_count=...)` / `wait(hits=...)` — block until every
+  member satisfies the condition.
+* `group.trigger()` — fire every member's target now (cache-invalidate-all).
+* `group.is_running()` — True iff active and every member is running.
+* `group.start()` / `await group.cancel_all()` — explicit lifecycle
+  for use outside `async with`.
+* `group.cancel_threadsafe(timeout=5.0)` — cancel from a non-loop
+  thread (signal handler, sync REST endpoint, worker thread).
+
+Each of `wait()` and `trigger()` accepts `timeout=` (whole-group
+wall-clock bound) and `return_exceptions=True` (per-member errors
+appear in the result list instead of propagating, mirroring
+`asyncio.gather`).
 
 ### Trigger now
 

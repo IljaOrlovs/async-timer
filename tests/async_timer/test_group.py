@@ -143,3 +143,438 @@ async def test_group_is_iterable():
     timers = [async_timer.Timer(delay=10e-5, target=lambda: 1) for _ in range(3)]
     group = async_timer.TimerGroup(timers)
     assert list(group) == timers
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.wait
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_wait_empty_returns_empty_list_immediately():
+    group = async_timer.TimerGroup()
+    assert await group.wait(hit_count=1) == []
+
+
+@pytest.mark.asyncio
+async def test_group_wait_blocks_until_all_members_hit_target():
+    counter_a = 0
+    counter_b = 0
+
+    def make_a():
+        nonlocal counter_a
+        counter_a += 1
+        return ("a", counter_a)
+
+    def make_b():
+        nonlocal counter_b
+        counter_b += 1
+        return ("b", counter_b)
+
+    t_a = async_timer.Timer(delay=10e-5, target=make_a)
+    t_b = async_timer.Timer(delay=10e-5, target=make_b)
+    async with async_timer.TimerGroup([t_a, t_b]) as group:
+        results = await group.wait(hit_count=2)
+    # Order preserved.
+    assert [t for t, _ in results] == [t_a, t_b]
+    # Each timer has hit at least the target.
+    assert t_a.hit_count >= 2 and t_b.hit_count >= 2
+    # Returned value is each timer's last tick result — match the shape
+    # produced by its target. (Can't compare to `timer.last_result` here:
+    # the timer may have ticked again between gather resolving and now.)
+    a_rv = next(rv for t, rv in results if t is t_a)
+    b_rv = next(rv for t, rv in results if t is t_b)
+    assert a_rv[0] == "a" and a_rv[1] >= 2
+    assert b_rv[0] == "b" and b_rv[1] >= 2
+
+
+@pytest.mark.asyncio
+async def test_group_wait_uses_hits_for_relative_target():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    async with async_timer.TimerGroup([t]) as group:
+        await t.wait(hit_count=3)  # advance the timer
+        baseline = t.hit_count
+        await group.wait(hits=2)
+    assert t.hit_count >= baseline + 2
+
+
+@pytest.mark.asyncio
+async def test_group_wait_timeout_raises_and_cancels_pending():
+    slow = async_timer.Timer(delay=10.0, target=lambda: 1)  # essentially never
+    async with async_timer.TimerGroup([slow]) as group:
+        with pytest.raises(asyncio.TimeoutError):
+            await group.wait(hit_count=5, timeout=0.05)
+        # The group is still active; the timer is still running.
+        assert slow.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_wait_propagates_first_member_failure_by_default():
+    boom_count = 0
+
+    def boom():
+        nonlocal boom_count
+        boom_count += 1
+        if boom_count >= 2:
+            raise RuntimeError("kaboom")
+        return 1
+
+    healthy = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    sick = async_timer.Timer(delay=10e-5, target=boom, exc_cb=lambda *_a, **_kw: None)
+    async with async_timer.TimerGroup([healthy, sick]) as group:
+        with pytest.raises(RuntimeError, match="kaboom"):
+            await group.wait(hit_count=10)
+
+
+@pytest.mark.asyncio
+async def test_group_wait_return_exceptions_collects_per_member_errors():
+    boom_count = 0
+
+    def boom():
+        nonlocal boom_count
+        boom_count += 1
+        if boom_count >= 2:
+            raise RuntimeError("kaboom")
+        return "ok"
+
+    healthy = async_timer.Timer(delay=10e-5, target=lambda: "h")
+    sick = async_timer.Timer(delay=10e-5, target=boom, exc_cb=lambda *_a, **_kw: None)
+    async with async_timer.TimerGroup([healthy, sick]) as group:
+        # Healthy will easily hit 3; sick stops on the second call.
+        # With return_exceptions=True both come back, sick as an exception.
+        results = await group.wait(hit_count=3, return_exceptions=True)
+    assert len(results) == 2
+    by_timer = dict(results)
+    # Healthy succeeded; its last_rv is its last_result.
+    assert by_timer[healthy] == healthy.last_result
+    # Sick raised; CancelledError from .wait() on a stopped timer.
+    assert isinstance(by_timer[sick], BaseException)
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.is_running
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_is_running_false_before_start():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    group = async_timer.TimerGroup([t])
+    assert group.is_running() is False
+
+
+@pytest.mark.asyncio
+async def test_group_is_running_true_while_active():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    async with async_timer.TimerGroup([t]) as group:
+        assert group.is_running() is True
+    assert group.is_running() is False
+
+
+@pytest.mark.asyncio
+async def test_group_is_running_false_if_a_member_stopped():
+    t_ok = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t_dead = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    async with async_timer.TimerGroup([t_ok, t_dead]) as group:
+        await t_dead.cancel()
+        assert group.is_running() is False
+        assert t_ok.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_is_running_vacuous_true_for_empty_active_group():
+    async with async_timer.TimerGroup() as group:
+        assert group.is_running() is True
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.trigger
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_trigger_empty_returns_empty_list():
+    async with async_timer.TimerGroup() as group:
+        assert await group.trigger() == []
+
+
+@pytest.mark.asyncio
+async def test_group_trigger_fires_every_member_and_returns_values():
+    counter_a = 0
+    counter_b = 0
+
+    async def make_a():
+        nonlocal counter_a
+        counter_a += 1
+        return ("a", counter_a)
+
+    async def make_b():
+        nonlocal counter_b
+        counter_b += 1
+        return ("b", counter_b)
+
+    # Long delays so a natural tick can't race the trigger.
+    t_a = async_timer.Timer(delay=60, target=make_a)
+    t_b = async_timer.Timer(delay=60, target=make_b)
+    async with async_timer.TimerGroup([t_a, t_b]) as group:
+        # First (delay=0) tick lands almost immediately; wait it out so
+        # trigger's count is unambiguous.
+        await group.wait(hit_count=1)
+        baseline_a, baseline_b = counter_a, counter_b
+        results = await group.trigger()
+    # Order preserved.
+    assert [t for t, _ in results] == [t_a, t_b]
+    # Each target ran exactly once more.
+    assert counter_a == baseline_a + 1
+    assert counter_b == baseline_b + 1
+    by_timer = dict(results)
+    assert by_timer[t_a] == ("a", baseline_a + 1)
+    assert by_timer[t_b] == ("b", baseline_b + 1)
+
+
+@pytest.mark.asyncio
+async def test_group_trigger_timeout_raises():
+    # A target that hangs forever — trigger() will never resolve.
+    async def stuck():
+        await asyncio.sleep(60)
+
+    t = async_timer.Timer(delay=60, target=stuck)
+    async with async_timer.TimerGroup([t]) as group:
+        with pytest.raises(asyncio.TimeoutError):
+            await group.trigger(timeout=0.05)
+
+
+@pytest.mark.asyncio
+async def test_group_trigger_return_exceptions_collects_per_member():
+    t_ok = async_timer.Timer(delay=60, target=lambda: "ok")
+    t_dead = async_timer.Timer(delay=60, target=lambda: "x")
+    async with async_timer.TimerGroup([t_ok, t_dead]) as group:
+        await group.wait(hit_count=1)
+        # Stop one member; its trigger() will raise RuntimeError.
+        await t_dead.cancel()
+        results = await group.trigger(return_exceptions=True)
+    assert len(results) == 2
+    by_timer = dict(results)
+    assert by_timer[t_ok] == "ok"
+    assert isinstance(by_timer[t_dead], BaseException)
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.start (explicit)
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_explicit_start_and_cancel_without_context_manager():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    group = async_timer.TimerGroup([t])
+    group.start()
+    try:
+        assert group.is_running()
+        assert t.is_running()
+    finally:
+        await group.cancel_all()
+    assert not group.is_running()
+    assert not t.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_start_is_idempotent_while_active():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    async with async_timer.TimerGroup([t]) as group:
+        # Second start while active is a no-op.
+        group.start()
+        assert t.is_running()
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.name
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_name_in_repr():
+    group = async_timer.TimerGroup(name="caches")
+    assert "caches" in repr(group)
+
+
+@pytest.mark.asyncio
+async def test_group_name_scopes_cancel_failure_logger(caplog):
+    import logging
+
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1, start=True)
+    await t.join()
+
+    async def _bad_cancel():
+        raise RuntimeError("boom")
+
+    t.cancel = _bad_cancel  # type: ignore[method-assign]
+    group = async_timer.TimerGroup([t], name="caches")
+    with caplog.at_level(logging.ERROR, logger="async_timer.group.caches"):
+        await group.cancel_all()
+    assert any(r.name == "async_timer.group.caches" for r in caplog.records)
+
+
+# ---------------------------------------------------------------------
+# TimerGroup.cancel_threadsafe
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_from_loop_thread_raises():
+    async with async_timer.TimerGroup([
+        async_timer.Timer(delay=10e-5, target=lambda: 1)
+    ]) as group:
+        with pytest.raises(RuntimeError, match="own event loop"):
+            group.cancel_threadsafe()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_unstarted_raises():
+    group = async_timer.TimerGroup([
+        async_timer.Timer(delay=10e-5, target=lambda: 1)
+    ])
+    with pytest.raises(RuntimeError, match="has not been started"):
+        group.cancel_threadsafe()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_from_worker_thread():
+    import threading
+
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    group = async_timer.TimerGroup([t])
+    group.start()
+    assert t.is_running()
+
+    err: list = []
+
+    def worker():
+        try:
+            group.cancel_threadsafe(timeout=5.0)
+        except BaseException as e:  # pragma: no cover - failure path
+            err.append(e)
+
+    th = threading.Thread(target=worker)
+    th.start()
+    # Pump the loop so the threadsafe-scheduled coroutine can run.
+    while th.is_alive():
+        await asyncio.sleep(0.01)
+    th.join()
+    assert not err, err
+    assert not t.is_running()
+    assert not group.is_running()
+
+
+# ---------------------------------------------------------------------
+# Defensive paths
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_aenter_partial_failure_cancels_started_members():
+    """`async with` path: if a later start() raises, earlier members
+    are awaited-cancelled before the exception propagates."""
+    t_good = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t_bad = async_timer.Timer(delay=10e-5, target=lambda: 1)
+
+    def boom():
+        raise RuntimeError("intentional aenter failure")
+
+    t_bad.start = boom  # type: ignore[method-assign]
+
+    group = async_timer.TimerGroup([t_good, t_bad])
+    with pytest.raises(RuntimeError, match="intentional aenter failure"):
+        async with group:
+            pytest.fail("body should not run")  # pragma: no cover
+    assert group._active is False
+    assert not t_good.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_start_partial_failure_cancels_started_members():
+    """If a later member's start() raises, the earlier ones get cleaned up."""
+    t_good = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t_bad = async_timer.Timer(delay=10e-5, target=lambda: 1)
+
+    def boom():
+        raise RuntimeError("intentional start failure")
+
+    t_bad.start = boom  # type: ignore[method-assign]
+
+    group = async_timer.TimerGroup([t_good, t_bad])
+    with pytest.raises(RuntimeError, match="intentional start failure"):
+        group.start()
+    # State rolled back.
+    assert group._active is False
+    # The scheduled cancel for t_good runs on the next loop turn.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not t_good.is_running()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_rejects_closed_loop():
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    group = async_timer.TimerGroup([t])
+    # Bind a loop that we then close, without going through start().
+    dead_loop = asyncio.new_event_loop()
+    dead_loop.close()
+    group._loop = dead_loop
+    with pytest.raises(RuntimeError, match="event loop is closed"):
+        group.cancel_threadsafe()
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_threadsafe_timeout_raises_TimeoutError():
+    import threading
+
+    # A timer whose cancel() awaits forever — forces the threadsafe
+    # call to hit its timeout.
+    t = async_timer.Timer(delay=10e-5, target=lambda: 1)
+    t.start()
+
+    async def _stuck_cancel():
+        await asyncio.sleep(60)
+
+    t.cancel = _stuck_cancel  # type: ignore[method-assign]
+    group = async_timer.TimerGroup([t])
+    group._loop = asyncio.get_running_loop()
+    group._active = True
+
+    raised: list = []
+
+    def worker():
+        try:
+            group.cancel_threadsafe(timeout=0.05)
+        except TimeoutError as e:
+            raised.append(e)
+
+    th = threading.Thread(target=worker)
+    th.start()
+    while th.is_alive():
+        await asyncio.sleep(0.01)
+    th.join()
+    assert raised and "did not complete within" in str(raised[0])
+
+    # Cleanup: restore real cancel so the timer actually stops at test end.
+    del t.cancel
+    await t.cancel()
+
+
+@pytest.mark.asyncio
+async def test_group_wait_lifespan_warmup_pattern():
+    """The headline use case: warm a set of caches before serving."""
+    caches = [{"warm": False}, {"warm": False}, {"warm": False}]
+
+    def make_warmer(i):
+        def warm():
+            caches[i]["warm"] = True
+        return warm
+
+    async with async_timer.TimerGroup() as group:
+        for i in range(3):
+            group.add(async_timer.Timer(delay=10e-5, target=make_warmer(i)))
+        await group.wait(hit_count=1)
+        # By this point every cache is warm — no traffic has slipped through.
+        assert all(c["warm"] for c in caches)

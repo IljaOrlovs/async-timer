@@ -10,6 +10,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-05-22
+
+### Added — `TimerGroup` parity with `Timer`
+
+- `TimerGroup.wait(hit_count=..., hits=..., timeout=..., return_exceptions=False)`
+  — block until every member timer satisfies the hit-count condition.
+  Returns `[(timer, last_rv), ...]` in iteration order; with
+  `return_exceptions=True` per-member exceptions are returned in place
+  of their values (mirroring `asyncio.gather`). Empty group returns
+  immediately. Enables the lifespan-warmup pattern across multiple
+  caches with one await.
+- `TimerGroup.trigger(timeout=..., return_exceptions=False)` — fire
+  every member's target now and collect their results. Same shape as
+  `wait()`. Useful for cache-invalidate-all patterns.
+- `TimerGroup.is_running()` — True if the group is active and every
+  member is running. Vacuously True for an empty active group.
+- `TimerGroup.start()` — explicit lifecycle entry for use outside
+  `async with`. Idempotent while active. Pairs with the existing
+  `cancel_all()`.
+- `TimerGroup.cancel_threadsafe(timeout=None)` — symmetric to
+  `Timer.cancel_threadsafe`. Marshal a group cancel from a non-loop
+  thread (signal handler, sync REST endpoint, worker thread).
+- `TimerGroup(..., name=...)` — identifier shown in `repr()` and used
+  to scope the per-group logger to `async_timer.group.<name>`.
+
+### Changed
+
+- Reworked README to lead with the problem (drift, no cancellation
+  story, no startup gate) and the FastAPI lifespan example. Added a
+  neutral "when to use this — and when not to" comparison table
+  covering APScheduler, aiocron, arq, dramatiq, Celery beat, and
+  `loop.call_later`.
+- New `docs/recipes/` with narrative walk-throughs and new `examples/`
+  with runnable scripts for FastAPI, Starlette, aiohttp, Prometheus,
+  Redis heartbeats, and SIGTERM-driven graceful shutdown.
+
 ## [1.2.0] - 2026-05-21
 
 Backwards-compatible overhaul. The basic

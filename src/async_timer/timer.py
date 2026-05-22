@@ -109,7 +109,22 @@ class Timer(typing.Generic[T]):
     """
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
-    hit_count: int = 0  # successful ticks so far
+    # Number of successful ticks that have *completed*. Incremented
+    # after the target returns and after the result has been broadcast
+    # to waiters and subscribers.
+    #
+    # Observation semantics:
+    #   * During the Nth call to `target`, `hit_count == N - 1`
+    #     (zero successful ticks have completed yet on the first call).
+    #   * Other observers — `join()` / `wait()` waiters, `subscribe()`
+    #     consumers, anything reading the attribute after the tick has
+    #     resolved — see the post-increment value (`N` after the Nth
+    #     tick), because external coroutines do not resume until the
+    #     timer task yields, which happens *after* the increment.
+    #
+    # Exceptions do NOT count: a target raise leaves `hit_count`
+    # unchanged and stops the timer.
+    hit_count: int = 0
     target_caller: "async_timer.target_caller.Caller[T]"
 
     name: typing.Optional[str]
@@ -345,6 +360,11 @@ class Timer(typing.Generic[T]):
                     self.result_fanout.send_result(rv)
                     for sub in list(self._subscriptions):
                         sub._push_value(rv)
+                # Increment is observable to external code (waiters /
+                # subscribers) on this same tick: their resumption is
+                # only scheduled by the calls above and runs after this
+                # task next yields. See the `hit_count` attribute
+                # comment for the full semantic.
                 self.hit_count += 1
         finally:
             self.result_fanout.cancel()

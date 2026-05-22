@@ -248,3 +248,71 @@ async def test_fixed_rate_timer_emits_skip_warning(caplog):
             await timer.join()
     await timer.cancel()
     assert any("fell behind" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------
+# hit_count observation semantics
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hit_count_is_N_minus_1_inside_target():
+    """During the Nth call to target, hit_count == N-1 (zero ticks
+    have *completed* yet on the first call)."""
+    observed = []
+
+    timer = async_timer.Timer(delay=10e-5, target=lambda: None)
+
+    def reader():
+        observed.append(timer.hit_count)
+
+    timer.target_caller.target = reader  # swap to the observing target
+    timer.start()
+    try:
+        await timer.wait(hit_count=5)
+    finally:
+        await timer.cancel()
+    # First five calls saw 0, 1, 2, 3, 4.
+    assert observed[:5] == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_hit_count_is_post_increment_for_join_waiters():
+    """A waiter awoken by send_result reads the post-increment count."""
+    timer = async_timer.Timer(delay=10e-5, target=lambda: "rv")
+    timer.start()
+    try:
+        await timer.join()  # wait for the first tick
+        # Waiter resumed after the tick completed; hit_count reflects it.
+        assert timer.hit_count >= 1
+        first = timer.hit_count
+        await timer.join()
+        assert timer.hit_count >= first + 1
+    finally:
+        await timer.cancel()
+
+
+@pytest.mark.asyncio
+async def test_hit_count_unchanged_when_target_raises():
+    """Target exceptions stop the timer without incrementing hit_count."""
+    calls = 0
+
+    def boom():
+        nonlocal calls
+        calls += 1
+        if calls >= 3:
+            raise RuntimeError("stop")
+        return calls
+
+    timer = async_timer.Timer(
+        delay=10e-5,
+        target=boom,
+        exc_cb=lambda *_a, **_kw: None,  # swallow
+    )
+    timer.start()
+    # Wait until the timer stops (the 3rd call raises).
+    while timer.is_running():
+        await asyncio.sleep(10e-5)
+    # Two successful ticks; the 3rd raised and was NOT counted.
+    assert timer.hit_count == 2
+    assert calls == 3

@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added — observability (layer 1)
+
+- `Timer.exception_count`, `Timer.last_exception`, `Timer.last_exception_at`
+  — cumulative-across-restarts target-exception telemetry. Atomic-read
+  under the GIL, polling-friendly for Prometheus exporters or sync
+  `/metrics` endpoints.
+- Every library-emitted log call now carries `extra={"event":
+  "async_timer.<kind>", ...}` structured fields. JSON-log handlers
+  (Datadog, Splunk, journald, structlog) read them as queryable
+  attributes without parsing the message string. Events:
+  `async_timer.target_exception`, `async_timer.fixed_rate_skip`,
+  `async_timer.cancel_aws_raised`, `async_timer.subscription_drop`,
+  `async_timer.group_cancel_failure`. Human-readable messages are
+  unchanged — console UX is the same.
+- The default `exc_cb` now uses the per-timer logger
+  (`async_timer.timer.<name>`) instead of the module logger, so named
+  timers can be filtered separately at the handler.
+
 ## [1.3.0] - 2026-06-07
 
 ### Added — exception hierarchy

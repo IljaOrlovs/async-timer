@@ -84,6 +84,10 @@ class TimerPacemaker:
                     "cancel_aws awaitable %r raised %s; treating as stop signal",
                     fut,
                     exc,
+                    extra={
+                        "event": "async_timer.cancel_aws_raised",
+                        "exception_type": type(exc).__name__,
+                    },
                     exc_info=exc,
                 )
         self.stop()
@@ -172,12 +176,19 @@ class TimerPacemaker:
             target_index += 1
             next_tick_at = self._start_time + target_index * self.delay
         if skipped:
+            behind_s = now - (next_tick_at - skipped * self.delay)
             logger.warning(
                 "fixed_rate pacemaker fell behind: skipping %d tick(s) "
                 "(delay=%.3fs, behind by %.3fs)",
                 skipped,
                 self.delay,
-                now - (next_tick_at - skipped * self.delay),
+                behind_s,
+                extra={
+                    "event": "async_timer.fixed_rate_skip",
+                    "skipped_ticks": skipped,
+                    "delay_s": self.delay,
+                    "behind_s": behind_s,
+                },
             )
         self._tick_number = target_index
         wait_for = next_tick_at - now

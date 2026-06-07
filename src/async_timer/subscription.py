@@ -92,6 +92,12 @@ class Subscription(typing.Generic[T]):
                 self._name or "<unnamed>",
                 self._maxsize,
                 self.dropped_count,
+                extra={
+                    "event": "async_timer.subscription_drop",
+                    "subscription_name": self._name,
+                    "maxsize": self._maxsize,
+                    "dropped_count": self.dropped_count,
+                },
             )
         self._queue.put_nowait(value)
 

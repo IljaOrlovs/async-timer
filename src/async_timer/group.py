@@ -156,6 +156,12 @@ class TimerGroup:
                     "TimerGroup: cancelling %r raised %s",
                     timer,
                     type(result).__name__,
+                    extra={
+                        "event": "async_timer.group_cancel_failure",
+                        "group_name": self.name,
+                        "timer_name": timer.name,
+                        "exception_type": type(result).__name__,
+                    },
                     exc_info=result,
                 )
 

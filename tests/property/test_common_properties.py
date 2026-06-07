@@ -7,7 +7,9 @@ from hypothesis import strategies as st
 from async_timer._common import _validate_nonnegative, _validate_unit_range
 
 
-@given(value=st.floats(min_value=0, max_value=1e9, allow_nan=False, allow_infinity=False))
+@given(
+    value=st.floats(min_value=0, max_value=1e9, allow_nan=False, allow_infinity=False)
+)
 def test_validate_nonnegative_accepts_nonneg(value):
     _validate_nonnegative(value, "x")  # must not raise
 
@@ -26,7 +28,9 @@ def test_validate_unit_range_accepts(value):
 @given(
     value=st.one_of(
         st.floats(max_value=-1e-12, allow_nan=False, allow_infinity=False),
-        st.floats(min_value=1 + 1e-12, max_value=1e9, allow_nan=False, allow_infinity=False),
+        st.floats(
+            min_value=1 + 1e-12, max_value=1e9, allow_nan=False, allow_infinity=False
+        ),
     )
 )
 def test_validate_unit_range_rejects_out_of_range(value):

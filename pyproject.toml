@@ -109,14 +109,13 @@ reportIncompatibleVariableOverride = false
 
 [tool.mutmut]
 # Run with: `pdm run mutmut run` (slow). View results: `pdm run mutmut results`.
-# NOTE: mutmut 3.x has known friction with src-layout + namespace packages —
-# it copies the mutated file into `mutants/` but discovers the package as a
-# namespace package, shadowing the editable install. If you hit
-# `AttributeError: module 'async_timer' has no attribute 'Timer'`, copy the
-# whole src tree into mutants/ first, or pin to mutmut 2.x.
-# The `runner` key is ignored by mutmut 3.x (it always uses `pytest -x -q`).
+# Mutmut copies sources into `mutants/` and runs pytest from there. The
+# `also_copy` entry below ships the badge output dir so pytest-local-badge's
+# plugin-load assertion is satisfied — without it pytest aborts before
+# collecting tests.
 paths_to_mutate = ["src/async_timer/", "src/mock_async_timer/"]
 tests_dir = ["tests/"]
+also_copy = ["docs/badges/"]
 
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"

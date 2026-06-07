@@ -80,13 +80,11 @@ class TimerGroup:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start every non-running member.
+        """Start every non-running member. Idempotent.
 
-        Idempotent: members already running are left alone. If any
-        member's `start()` raises, the members that did start are
-        scheduled for cancellation and the original exception
-        propagates. Binds the group to the current running loop so
-        `cancel_threadsafe()` works from other threads.
+        On a member's `start()` failure, already-started members are
+        scheduled for cancellation and the exception propagates. Binds
+        to the current loop for `cancel_threadsafe()`.
         """
         if self._active:
             return
@@ -173,27 +171,13 @@ class TimerGroup:
         timeout: typing.Optional[float] = None,
         return_exceptions: bool = False,
     ) -> GroupResult:
-        """Wait until every member timer satisfies the hit-count condition.
+        """AND-combined :meth:`Timer.wait` across every member.
 
-        Per-member semantics match :meth:`Timer.wait`. Group semantics
-        are AND-combined: this returns when *all* members are satisfied.
-        Empty group returns ``[]`` immediately.
-
-        Args:
-            hit_count: absolute hit-count target applied to each member.
-            hits: additional ticks each member must produce from now.
-            timeout: wall-clock upper bound on the whole-group wait,
-                seconds. Raises ``TimeoutError`` if exceeded; pending
-                per-member waits are cancelled.
-            return_exceptions: if False (default), the first member
-                exception propagates and the rest are cancelled. If
-                True, exceptions are placed in the result list in place
-                of the per-member value (mirrors ``asyncio.gather``).
-
-        Returns:
-            ``[(timer, last_rv), ...]`` in iteration order. With
-            ``return_exceptions=True`` an entry's second element may be
-            a ``BaseException`` instead of ``last_rv``.
+        Returns ``[(timer, last_rv), ...]`` in iteration order. Empty
+        group returns ``[]``. ``timeout`` is a whole-group bound that
+        raises ``TimeoutError`` and cancels pending per-member waits.
+        ``return_exceptions`` mirrors ``asyncio.gather`` — entries may
+        carry a ``BaseException`` in place of ``last_rv``.
         """
         if not self.timers:
             return []
@@ -215,28 +199,15 @@ class TimerGroup:
         timeout: typing.Optional[float] = None,
         return_exceptions: bool = False,
     ) -> GroupResult:
-        """Fire every member's target now and collect their results.
+        """Concurrent :meth:`Timer.trigger` across every member — fires
+        each target now and collects results. Cache-invalidate-all
+        pattern.
 
-        Concurrent fan-out of :meth:`Timer.trigger` across every
-        member. Each member's regular schedule resumes from the trigger
-        moment (re-anchored for ``fixed_rate``). Empty group returns
-        ``[]`` immediately.
-
-        Common use: cache-invalidate-all — force every refresh timer
-        in the group to re-fetch right now without restarting them.
-
-        Args:
-            timeout: wall-clock upper bound on the whole-group trigger,
-                seconds. Raises ``TimeoutError`` if exceeded.
-            return_exceptions: if False (default), the first member
-                exception propagates. If True, exceptions appear in the
-                result list (mirrors ``asyncio.gather``). Note that a
-                member that is not currently running raises
-                ``RuntimeError`` from its own ``trigger()``.
-
-        Returns:
-            ``[(timer, rv), ...]`` in iteration order. ``rv`` is the
-            value returned by that member's target.
+        Returns ``[(timer, rv), ...]`` in iteration order. Each member's
+        schedule resumes from the trigger moment (re-anchored for
+        ``fixed_rate``). ``timeout`` and ``return_exceptions`` mirror
+        :meth:`wait`. A non-running member raises ``TimerNotRunningError``
+        from its own ``trigger()``.
         """
         if not self.timers:
             return []
@@ -254,16 +225,12 @@ class TimerGroup:
     # ------------------------------------------------------------------
 
     def cancel_threadsafe(self, timeout: typing.Optional[float] = None) -> None:
-        """Thread-safe `cancel_all()`. Blocks until cancellation completes.
+        """Thread-safe `cancel_all()`. Blocks until done.
 
-        Use from a non-loop thread (signal handlers, sync REST endpoints,
-        worker threads). Raises ``RuntimeError`` if called from the
-        group's own loop thread (use ``await cancel_all()`` instead),
-        if the group has not been started, or if the bound loop is
-        closed.
-
-        ``timeout`` (seconds) bounds the wait. If exceeded, raises
-        ``TimeoutError``; the cancellation may still complete on the
+        Raises `ThreadsafeDispatchError` from the group's own loop
+        thread (use ``await cancel_all()`` there), before start, or
+        after the bound loop closes. On ``timeout`` (seconds) exceeded
+        raises ``TimeoutError``; cancellation may still complete on the
         loop asynchronously.
         """
         loop = _resolve_threadsafe_loop(

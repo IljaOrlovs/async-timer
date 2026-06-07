@@ -48,13 +48,7 @@ TimerCallbackT = typing.Callable[["Timer[T]", TimerMainTaskT[T]], None]
 
 
 class FanoutRv(typing.Generic[T]):
-    """Single-shot result broadcaster.
-
-    `send_result(v)` resolves every currently-awaiting `wait()` with
-    `v` and clears the list. Consumers not awaiting at that instant
-    miss the value. `send_exception()` is sticky: late waiters also
-    see the exception.
-    """
+    """Single-shot result broadcaster. See module docstring."""
 
     futures: typing.List[asyncio.Future]
     _closed: bool
@@ -118,21 +112,11 @@ class Timer(typing.Generic[T]):
     """
 
     pacemaker: "async_timer.pacemaker.TimerPacemaker"
-    # Number of successful ticks that have *completed*. Incremented
-    # after the target returns and after the result has been broadcast
-    # to waiters and subscribers.
-    #
-    # Observation semantics:
-    #   * During the Nth call to `target`, `hit_count == N - 1`
-    #     (zero successful ticks have completed yet on the first call).
-    #   * Other observers — `join()` / `wait()` waiters, `subscribe()`
-    #     consumers, anything reading the attribute after the tick has
-    #     resolved — see the post-increment value (`N` after the Nth
-    #     tick), because external coroutines do not resume until the
-    #     timer task yields, which happens *after* the increment.
-    #
-    # Exceptions do NOT count: a target raise leaves `hit_count`
-    # unchanged and stops the timer.
+    # Successful ticks completed. Incremented after broadcast, so during
+    # the Nth `target` call it reads as N-1, but every external observer
+    # (wait/join/subscribe) sees the post-increment value because they
+    # only resume after the timer task yields. Target exceptions do not
+    # count: a raise leaves hit_count unchanged and stops the timer.
     hit_count: int = 0
     target_caller: "async_timer.target_caller.Caller[T]"
 
@@ -473,15 +457,13 @@ class Timer(typing.Generic[T]):
         )
 
     def cancel_threadsafe(self, timeout: typing.Optional[float] = None) -> None:
-        """Thread-safe `cancel()`. Blocks until cancellation completes.
+        """Thread-safe `cancel()`. Blocks until done.
 
-        Use from a non-loop thread (signal handlers, sync REST endpoints,
-        worker threads). Raises `RuntimeError` if called from the
-        timer's own loop thread; use `await cancel()` there instead.
-
-        `timeout` (seconds) bounds the wait. If exceeded, raises
-        `TimeoutError`; the cancellation may still complete on the loop
-        asynchronously.
+        Use from a non-loop thread (signal handlers, sync handlers,
+        workers). Raises `ThreadsafeDispatchError` from the timer's own
+        loop thread — use `await cancel()` there. On `timeout` (seconds)
+        exceeded raises `TimeoutError`; cancellation may still complete
+        on the loop asynchronously.
         """
         loop = self._check_threadsafe_call("await timer.cancel()")
         return _run_threadsafe(

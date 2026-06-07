@@ -49,12 +49,8 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
 
 
 class MockTimer(async_timer.Timer):
-    """Timer subclass using `MockPacemaker` — no real sleeps. Full Timer API.
-
-    Use in tests to drive a Timer's tick loop without wall-clock waits.
-    The mocked sleep yields to the scheduler each iteration, so
-    `await timer.wait(hits=N)` resolves as soon as the loop has a
-    chance to run N times.
+    """Timer subclass with mocked sleep — ticks fire as fast as the loop
+    can schedule them. Full Timer API.
 
         from mock_async_timer import MockTimer
 

@@ -141,7 +141,6 @@ class TimerPacemaker:
             wait_for = self._compute_fixed_rate_wait()
         else:
             wait_for = self._apply_jitter(self.delay)
-            self._tick_number += 1
 
         if wait_for <= 0:
             await asyncio.sleep(0)  # always yield to avoid starvation

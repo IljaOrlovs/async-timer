@@ -108,13 +108,15 @@ exclude = ["**/__pycache__", ".venv", "docs"]
 reportIncompatibleVariableOverride = false
 
 [tool.mutmut]
-# Run with: `pdm run mutmut run` (slow — runs the test suite once per mutant).
-# View results: `pdm run mutmut results` and `pdm run mutmut show <id>`.
+# Run with: `pdm run mutmut run` (slow). View results: `pdm run mutmut results`.
+# NOTE: mutmut 3.x has known friction with src-layout + namespace packages —
+# it copies the mutated file into `mutants/` but discovers the package as a
+# namespace package, shadowing the editable install. If you hit
+# `AttributeError: module 'async_timer' has no attribute 'Timer'`, copy the
+# whole src tree into mutants/ first, or pin to mutmut 2.x.
+# The `runner` key is ignored by mutmut 3.x (it always uses `pytest -x -q`).
 paths_to_mutate = ["src/async_timer/", "src/mock_async_timer/"]
-tests_dir = "tests/"
-# Skip tests that aren't useful as mutation oracles (slow integration paths).
-# Use `--paths-to-mutate=src/async_timer/pacemaker.py` to scope a single run.
-runner = "pdm run pytest -x --no-cov -q"
+tests_dir = ["tests/"]
 
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"

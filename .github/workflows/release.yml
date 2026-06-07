@@ -52,6 +52,11 @@ jobs:
           # The action re-signs internally; the explicit Sigstore step
           # above remains the source of truth for the .sigstore bundles
           # attached to the GitHub Release.
+          # Don't generate publish attestations here — they'd land in
+          # dist/ as *.publish.attestation and the subsequent PyPI step
+          # would fail ("distributions already have publish attestations").
+          # The PyPI step below generates the authoritative attestations.
+          attestations: false
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: Extract release notes from CHANGELOG

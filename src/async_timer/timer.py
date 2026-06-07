@@ -98,9 +98,17 @@ def _noop_cb(*_, **__):
     pass
 
 
-def _default_main_loop_exception_callback(*_, **__):
-    """Default exc_cb: log the target exception. Does not re-raise."""
-    logger.exception("An unexpected exception in the timer loop.")
+def _default_main_loop_exception_callback(timer, target):
+    """Default exc_cb: log the target exception via the timer's logger."""
+    timer._logger.exception(
+        "An unexpected exception in the timer loop.",
+        extra={
+            "event": "async_timer.target_exception",
+            "timer_name": timer.name,
+            "target": repr(target),
+            "hit_count": timer.hit_count,
+        },
+    )
 
 
 class Timer(typing.Generic[T]):
@@ -127,6 +135,12 @@ class Timer(typing.Generic[T]):
     cancel_callback: TimerCallbackT[T]
     last_result: typing.Optional[T] = None
     last_tick_at: typing.Optional[float] = None  # time.monotonic() of last tick
+    # Target-exception telemetry. Cumulative across restarts (matches
+    # hit_count semantics). Updated before `exc_cb` fires, so the callback
+    # sees the post-increment values. Reads are atomic under the GIL.
+    exception_count: int = 0
+    last_exception: typing.Optional[BaseException] = None
+    last_exception_at: typing.Optional[float] = None  # time.monotonic()
     # WeakSet — dropped subscriptions get GC'd and auto-removed.
     _subscriptions: "weakref.WeakSet[Subscription[T]]"
     # Bound at start(); used by *_threadsafe methods to marshal calls
@@ -340,6 +354,11 @@ class Timer(typing.Generic[T]):
                 except StopAsyncIteration:
                     break
                 except Exception as err:
+                    # Record telemetry before exc_cb fires, so the callback
+                    # observes the post-increment values.
+                    self.exception_count += 1
+                    self.last_exception = err
+                    self.last_exception_at = time.monotonic()
                     self.result_fanout.send_exception(err)
                     # Snapshot: WeakSet may shrink mid-iter if a sub is GC'd.
                     for sub in list(self._subscriptions):

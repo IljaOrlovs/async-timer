@@ -293,6 +293,34 @@ async def test_periodic_refresh():
 Same surface as `Timer` — `join`, `wait`, `trigger`, `subscribe`,
 `TimerGroup`, decorator wrapping all work the same way.
 
+## Observability
+
+Every Timer exposes read-only telemetry attributes (atomic-read under the
+GIL — safe to poll from any thread, including a Prometheus exporter):
+
+| Attribute | Meaning |
+| --- | --- |
+| `timer.hit_count` | Successful ticks completed |
+| `timer.last_result` / `last_tick_at` | Latest tick value + `time.monotonic()` |
+| `timer.exception_count` | Target exceptions raised (cumulative across restarts) |
+| `timer.last_exception` / `last_exception_at` | Most recent target error + `time.monotonic()` |
+| `subscription.qsize` / `dropped_count` | Per-consumer buffer depth + cumulative drops |
+
+Every library-emitted log record carries `extra={"event": "async_timer.<kind>", ...}`
+structured fields — JSON-log handlers (Datadog, Splunk, journald, structlog)
+get queryable attributes without parsing the message string:
+
+| `event` | Fields |
+| --- | --- |
+| `async_timer.target_exception` | `timer_name`, `target`, `hit_count` |
+| `async_timer.fixed_rate_skip` | `skipped_ticks`, `delay_s`, `behind_s` |
+| `async_timer.cancel_aws_raised` | `exception_type` |
+| `async_timer.subscription_drop` | `subscription_name`, `maxsize`, `dropped_count` |
+| `async_timer.group_cancel_failure` | `group_name`, `timer_name`, `exception_type` |
+
+Named timers (`Timer(..., name="cache")`) scope their logger to
+`async_timer.timer.cache` — handy for per-timer log filtering.
+
 ## Exceptions
 
 All library-raised errors derive from `async_timer.TimerError`, which

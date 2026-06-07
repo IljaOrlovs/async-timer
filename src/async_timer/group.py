@@ -7,10 +7,10 @@ async with async_timer.TimerGroup() as group:
 """
 
 import asyncio
-import concurrent.futures
 import logging
 import typing
 
+from ._common import _resolve_threadsafe_loop, _run_threadsafe
 from .timer import Timer
 
 logger = logging.getLogger(__name__)
@@ -266,32 +266,17 @@ class TimerGroup:
         ``TimeoutError``; the cancellation may still complete on the
         loop asynchronously.
         """
-        loop = self._loop
-        if loop is None:
-            raise RuntimeError(
-                "TimerGroup: cannot dispatch — group has not been started "
-                "yet (no event loop bound). Call start() first."
-            )
-        if loop.is_closed():
-            raise RuntimeError(
-                "TimerGroup: target event loop is closed; cannot dispatch "
-                "cross-thread call."
-            )
-        try:
-            current = asyncio.get_running_loop()
-        except RuntimeError:
-            current = None
-        if current is loop:
-            raise RuntimeError(
-                "TimerGroup: called from the group's own event loop "
-                "thread. Use `await cancel_all()` instead."
-            )
-        fut = asyncio.run_coroutine_threadsafe(self.cancel_all(), loop)
-        try:
-            return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as err:
-            fut.cancel()
-            raise TimeoutError(
+        loop = _resolve_threadsafe_loop(
+            self._loop,
+            owner="TimerGroup",
+            async_alternative="await cancel_all()",
+        )
+        return _run_threadsafe(
+            self.cancel_all(),
+            loop,
+            timeout=timeout,
+            timeout_message=(
                 f"cancel_threadsafe: cancellation did not complete within "
                 f"{timeout}s (it may still complete on the loop)"
-            ) from err
+            ),
+        )

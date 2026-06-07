@@ -1,18 +1,39 @@
 from importlib import metadata
 
-from . import decorators, group, pacemaker, subscription, target_caller, timer
+from . import (
+    decorators,
+    exceptions,
+    group,
+    pacemaker,
+    subscription,
+    target_caller,
+    timer,
+)
 from .decorators import every
+from .exceptions import (
+    ThreadsafeDispatchError,
+    TimerAlreadyRunningError,
+    TimerError,
+    TimerNotRunningError,
+    TimerRestartError,
+)
 from .group import TimerGroup
 from .subscription import Subscription
 from .timer import Timer
 
 __all__ = [
     "Subscription",
+    "ThreadsafeDispatchError",
     "Timer",
+    "TimerAlreadyRunningError",
+    "TimerError",
     "TimerGroup",
+    "TimerNotRunningError",
+    "TimerRestartError",
     "__version__",
     "decorators",
     "every",
+    "exceptions",
     "group",
     "pacemaker",
     "subscription",

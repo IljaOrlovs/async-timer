@@ -4,6 +4,8 @@ import random
 import time
 import typing
 
+from ._common import _validate_nonnegative, _validate_unit_range
+
 logger = logging.getLogger(__name__)
 
 PacemakerMode = typing.Literal["fixed_delay", "fixed_rate"]
@@ -47,12 +49,9 @@ class TimerPacemaker:
         initial_delay: float = 0.0,
         jitter: float = 0.0,
     ):
-        if delay < 0:
-            raise ValueError(f"delay must be >= 0, got {delay!r}")
-        if jitter < 0 or jitter > 1:
-            raise ValueError(f"jitter must be in [0, 1], got {jitter!r}")
-        if initial_delay < 0:
-            raise ValueError(f"initial_delay must be >= 0, got {initial_delay!r}")
+        _validate_nonnegative(delay, "delay")
+        _validate_unit_range(jitter, "jitter")
+        _validate_nonnegative(initial_delay, "initial_delay")
         if mode not in ("fixed_delay", "fixed_rate"):
             raise ValueError(
                 f"mode must be 'fixed_delay' or 'fixed_rate', got {mode!r}"

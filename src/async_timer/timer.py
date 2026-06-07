@@ -15,13 +15,22 @@ the exception, not a generic `CancelledError`.
 """
 
 import asyncio
-import concurrent.futures
 import logging
 import time
 import typing
 import weakref
 
 import async_timer
+from async_timer._common import (
+    _resolve_threadsafe_loop,
+    _run_threadsafe,
+    _validate_nonnegative,
+)
+from async_timer.exceptions import (
+    TimerAlreadyRunningError,
+    TimerNotRunningError,
+    TimerRestartError,
+)
 from async_timer.pacemaker import PacemakerMode
 from async_timer.subscription import Subscription
 
@@ -218,8 +227,7 @@ class Timer(typing.Generic[T]):
 
         Single attribute write; safe to call from any thread.
         """
-        if new_delay < 0:
-            raise ValueError(f"delay must be >= 0, got {new_delay!r}")
+        _validate_nonnegative(new_delay, "delay")
         self.pacemaker.delay = new_delay
 
     def start(self):
@@ -230,10 +238,10 @@ class Timer(typing.Generic[T]):
         built with `cancel_aws` — those are single-shot.
         """
         if self.is_running():
-            raise RuntimeError("Already running")
+            raise TimerAlreadyRunningError("Already running")
         is_restart = self._has_been_started
         if is_restart and self._had_cancel_aws:
-            raise RuntimeError(
+            raise TimerRestartError(
                 "Cannot restart a Timer that was constructed with "
                 "cancel_aws: those awaitables are single-shot and have "
                 "already been consumed. Construct a new Timer instead."
@@ -416,7 +424,7 @@ class Timer(typing.Generic[T]):
         the timer stops while the triggered tick is in flight.
         """
         if not self.is_running():
-            raise RuntimeError("Cannot trigger a Timer that is not running")
+            raise TimerNotRunningError("Cannot trigger a Timer that is not running")
         # Register the waiter before nudging the pacemaker.
         wait = asyncio.ensure_future(self.result_fanout.wait())
         self.pacemaker.trigger()
@@ -457,33 +465,12 @@ class Timer(typing.Generic[T]):
     def _check_threadsafe_call(
         self, async_alternative: str
     ) -> asyncio.AbstractEventLoop:
-        """Guard for *_threadsafe methods.
-
-        Returns the bound loop. Raises with a clear, actionable message
-        if the timer hasn't been started, the loop is dead, or we're
-        being called from the loop's own thread.
-        """
-        loop = self._loop
-        if loop is None:
-            raise RuntimeError(
-                f"{type(self).__name__}: cannot dispatch — timer has not "
-                f"been started yet (no event loop bound). Call start() first."
-            )
-        if loop.is_closed():
-            raise RuntimeError(
-                f"{type(self).__name__}: target event loop is closed; "
-                f"cannot dispatch cross-thread call."
-            )
-        try:
-            current = asyncio.get_running_loop()
-        except RuntimeError:
-            current = None
-        if current is loop:
-            raise RuntimeError(
-                f"{type(self).__name__}: called from the timer's own event "
-                f"loop thread. Use `{async_alternative}` instead."
-            )
-        return loop
+        """Guard for *_threadsafe methods. Returns the bound loop."""
+        return _resolve_threadsafe_loop(
+            self._loop,
+            owner=type(self).__name__,
+            async_alternative=async_alternative,
+        )
 
     def cancel_threadsafe(self, timeout: typing.Optional[float] = None) -> None:
         """Thread-safe `cancel()`. Blocks until cancellation completes.
@@ -497,15 +484,15 @@ class Timer(typing.Generic[T]):
         asynchronously.
         """
         loop = self._check_threadsafe_call("await timer.cancel()")
-        fut = asyncio.run_coroutine_threadsafe(self.cancel(), loop)
-        try:
-            return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as err:
-            fut.cancel()
-            raise TimeoutError(
+        return _run_threadsafe(
+            self.cancel(),
+            loop,
+            timeout=timeout,
+            timeout_message=(
                 f"cancel_threadsafe: cancellation did not complete within "
                 f"{timeout}s (it may still complete on the loop)"
-            ) from err
+            ),
+        )
 
     def trigger_threadsafe(self, timeout: typing.Optional[float] = None) -> T:
         """Thread-safe `trigger()`. Blocks and returns the tick's value.
@@ -513,15 +500,15 @@ class Timer(typing.Generic[T]):
         See `cancel_threadsafe` for cross-thread semantics.
         """
         loop = self._check_threadsafe_call("await timer.trigger()")
-        fut = asyncio.run_coroutine_threadsafe(self.trigger(), loop)
-        try:
-            return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as err:
-            fut.cancel()
-            raise TimeoutError(
+        return _run_threadsafe(
+            self.trigger(),
+            loop,
+            timeout=timeout,
+            timeout_message=(
                 f"trigger_threadsafe: tick did not arrive within {timeout}s "
                 f"(the trigger may still fire on the loop)"
-            ) from err
+            ),
+        )
 
     def __repr__(self) -> str:
         name_part = f" name={self.name!r}" if self.name else ""

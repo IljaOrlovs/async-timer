@@ -100,6 +100,9 @@ quote-style = "double"
 [tool.pyright]
 include = ["src", "tests"]
 exclude = ["**/__pycache__", ".venv", "docs"]
+# Subclass declarations re-annotate inherited generic attributes (e.g.
+# MockTimer.pacemaker: MockPacemaker overriding Timer.pacemaker) — those are
+# intentional narrowings, not real incompatibilities.
 reportIncompatibleVariableOverride = false
 
 [tool.pytest.ini_options]

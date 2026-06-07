@@ -187,11 +187,12 @@ class TimerPacemaker:
 
     def _apply_jitter(self, base: float, cap: typing.Optional[float] = None) -> float:
         if self.jitter == 0:
-            return base
-        delta = base * self.jitter * random.uniform(-1, 1)
-        out = base + delta
-        if out < 0:
-            out = 0.0
+            out = base
+        else:
+            delta = base * self.jitter * random.uniform(-1, 1)
+            out = base + delta
+            if out < 0:
+                out = 0.0
         if cap is not None and out > cap:
             out = cap
         return out

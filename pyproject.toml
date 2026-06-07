@@ -42,6 +42,8 @@ dev = [
     "ruff>=0.8",
     "asyncstdlib>=3.12",
     "pyright>=1.1.409",
+    "hypothesis>=6.100",
+    "mutmut>=2.5",
 ]
 
 [build-system]
@@ -104,6 +106,15 @@ exclude = ["**/__pycache__", ".venv", "docs"]
 # MockTimer.pacemaker: MockPacemaker overriding Timer.pacemaker) — those are
 # intentional narrowings, not real incompatibilities.
 reportIncompatibleVariableOverride = false
+
+[tool.mutmut]
+# Run with: `pdm run mutmut run` (slow — runs the test suite once per mutant).
+# View results: `pdm run mutmut results` and `pdm run mutmut show <id>`.
+paths_to_mutate = ["src/async_timer/", "src/mock_async_timer/"]
+tests_dir = "tests/"
+# Skip tests that aren't useful as mutation oracles (slow integration paths).
+# Use `--paths-to-mutate=src/async_timer/pacemaker.py` to scope a single run.
+runner = "pdm run pytest -x --no-cov -q"
 
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"

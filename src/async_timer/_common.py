@@ -38,8 +38,7 @@ def _resolve_threadsafe_loop(
         )
     if loop.is_closed():
         raise ThreadsafeDispatchError(
-            f"{owner}: target event loop is closed; cannot dispatch "
-            f"cross-thread call."
+            f"{owner}: target event loop is closed; cannot dispatch cross-thread call."
         )
     try:
         current = asyncio.get_running_loop()

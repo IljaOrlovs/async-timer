@@ -33,10 +33,10 @@ async def test_stop_on_with_exception_logs_warning(caplog):
             cancel_fut.set_exception(RuntimeError("kaboom"))
 
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("kaboom" in r.message or "RuntimeError" in str(r.exc_info)
-               for r in warning_records), (
-        "stop_on exception path should log a warning identifying the cause"
-    )
+    assert any(
+        "kaboom" in r.message or "RuntimeError" in str(r.exc_info)
+        for r in warning_records
+    ), "stop_on exception path should log a warning identifying the cause"
 
 
 @pytest.mark.asyncio

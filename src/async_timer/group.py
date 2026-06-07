@@ -182,10 +182,7 @@ class TimerGroup:
         if not self.timers:
             return []
         members = list(self.timers)
-        coros = [
-            t.wait(hit_count=hit_count, hits=hits)
-            for t in members
-        ]
+        coros = [t.wait(hit_count=hit_count, hits=hits) for t in members]
         gather = asyncio.gather(*coros, return_exceptions=return_exceptions)
         if timeout is None:
             results = await gather

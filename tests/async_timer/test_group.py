@@ -422,18 +422,16 @@ async def test_group_name_scopes_cancel_failure_logger(caplog):
 
 @pytest.mark.asyncio
 async def test_group_cancel_threadsafe_from_loop_thread_raises():
-    async with async_timer.TimerGroup([
-        async_timer.Timer(delay=10e-5, target=lambda: 1)
-    ]) as group:
+    async with async_timer.TimerGroup(
+        [async_timer.Timer(delay=10e-5, target=lambda: 1)]
+    ) as group:
         with pytest.raises(RuntimeError, match="own event loop"):
             group.cancel_threadsafe()
 
 
 @pytest.mark.asyncio
 async def test_group_cancel_threadsafe_unstarted_raises():
-    group = async_timer.TimerGroup([
-        async_timer.Timer(delay=10e-5, target=lambda: 1)
-    ])
+    group = async_timer.TimerGroup([async_timer.Timer(delay=10e-5, target=lambda: 1)])
     with pytest.raises(RuntimeError, match="has not been started"):
         group.cancel_threadsafe()
 
@@ -570,6 +568,7 @@ async def test_group_wait_lifespan_warmup_pattern():
     def make_warmer(i):
         def warm():
             caches[i]["warm"] = True
+
         return warm
 
     async with async_timer.TimerGroup() as group:

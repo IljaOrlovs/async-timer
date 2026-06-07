@@ -5,10 +5,94 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> Entries before v1.2.0 were reconstructed retroactively from commit history
-> and may be less detailed than later entries.
-
 ## [Unreleased]
+
+## [1.3.0] - 2026-06-07
+
+### Added — exception hierarchy
+
+- `async_timer.TimerError` base class with subclasses
+  `TimerAlreadyRunningError`, `TimerNotRunningError`,
+  `TimerRestartError`, and `ThreadsafeDispatchError`. All inherit from
+  `RuntimeError` so existing `except RuntimeError` clauses keep
+  working; catch `TimerError` to filter only library-originated
+  errors. The previously-raw `RuntimeError`s from `start()`,
+  `trigger()`, and the `*_threadsafe` methods now use the typed
+  subclasses (messages unchanged).
+
+### Added — property tests (hypothesis)
+
+- New `tests/property/` suite with 17 hypothesis property tests for
+  pacemaker math, subscription drop semantics, and the validation
+  helpers. Caught a real bug in `TimerPacemaker._apply_jitter`: the
+  early-return on `jitter == 0` bypassed the `cap` argument, so a
+  caller passing `base > cap` would receive `base`. Fixed; the only
+  current callsite (fixed-rate scheduling) is unaffected because it
+  passes `base == cap`.
+
+### Changed — internal refactor
+
+- Extracted shared helpers into `async_timer._common`:
+  `_validate_nonnegative`, `_validate_unit_range`,
+  `_resolve_threadsafe_loop`, `_run_threadsafe`. Eliminates duplicated
+  validation and cross-thread-dispatch boilerplate across
+  `pacemaker.py`, `subscription.py`, `timer.py`, and `group.py`. No
+  behavior change.
+- Removed dead `_tick_number += 1` increment in `TimerPacemaker`'s
+  `fixed_delay` path — that attribute is only consumed by
+  `_compute_fixed_rate_wait` (fixed-rate only), so the write was pure
+  overhead.
+- Replaced two `assert`s in `Caller` with explicit `TypeError` /
+  `RuntimeError` so the guards survive `python -O`.
+
+### Added — test ergonomics
+
+- 6 targeted mutation-guard tests for `TimerPacemaker` lock down the
+  `cancel_aws` warning behavior, `stop()` idempotency, `_reset()`
+  cancel-event clearing, and the jitter-cap regression.
+- `mutmut` and `hypothesis` added as dev dependencies; `[tool.mutmut]`
+  config in `pyproject.toml` (with `also_copy = ["docs/badges/"]` to
+  satisfy `pytest-local-badge`'s plugin-load assertion when pytest runs
+  from `mutants/`). Baseline sweep: 608 killed / 135 survived / 13
+  timeout of 756 mutants (~80% kill rate). Survivors are predominantly
+  equivalent mutants (log-string edits, falsy→falsy substitutions);
+  no critical-logic gap found in a sampled review.
+
+## [1.2.1] - 2026-05-22
+
+### Added — `TimerGroup` parity with `Timer`
+
+- `TimerGroup.wait(hit_count=..., hits=..., timeout=..., return_exceptions=False)`
+  — block until every member timer satisfies the hit-count condition.
+  Returns `[(timer, last_rv), ...]` in iteration order; with
+  `return_exceptions=True` per-member exceptions are returned in place
+  of their values (mirroring `asyncio.gather`). Empty group returns
+  immediately. Enables the lifespan-warmup pattern across multiple
+  caches with one await.
+- `TimerGroup.trigger(timeout=..., return_exceptions=False)` — fire
+  every member's target now and collect their results. Same shape as
+  `wait()`. Useful for cache-invalidate-all patterns.
+- `TimerGroup.is_running()` — True if the group is active and every
+  member is running. Vacuously True for an empty active group.
+- `TimerGroup.start()` — explicit lifecycle entry for use outside
+  `async with`. Idempotent while active. Pairs with the existing
+  `cancel_all()`.
+- `TimerGroup.cancel_threadsafe(timeout=None)` — symmetric to
+  `Timer.cancel_threadsafe`. Marshal a group cancel from a non-loop
+  thread (signal handler, sync REST endpoint, worker thread).
+- `TimerGroup(..., name=...)` — identifier shown in `repr()` and used
+  to scope the per-group logger to `async_timer.group.<name>`.
+
+### Changed
+
+- Reworked README to lead with the problem (drift, no cancellation
+  story, no startup gate) and the FastAPI lifespan example. Added a
+  neutral "when to use this — and when not to" comparison table
+  covering APScheduler, aiocron, arq, dramatiq, Celery beat, and
+  `loop.call_later`.
+- New `docs/recipes/` with narrative walk-throughs and new `examples/`
+  with runnable scripts for FastAPI, Starlette, aiohttp, Prometheus,
+  Redis heartbeats, and SIGTERM-driven graceful shutdown.
 
 ## [1.2.0] - 2026-05-21
 
@@ -161,7 +245,8 @@ Initial public release.
 
 First tagged release.
 
-[Unreleased]: https://github.com/IljaOrlovs/async-timer/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/IljaOrlovs/async-timer/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.6...v1.2.0
 [1.1.6]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.4...v1.1.5

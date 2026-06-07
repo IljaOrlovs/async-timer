@@ -42,6 +42,8 @@ dev = [
     "ruff>=0.8",
     "asyncstdlib>=3.12",
     "pyright>=1.1.409",
+    "hypothesis>=6.100",
+    "mutmut>=2.5",
 ]
 
 [build-system]
@@ -100,7 +102,20 @@ quote-style = "double"
 [tool.pyright]
 include = ["src", "tests"]
 exclude = ["**/__pycache__", ".venv", "docs"]
+# Subclass declarations re-annotate inherited generic attributes (e.g.
+# MockTimer.pacemaker: MockPacemaker overriding Timer.pacemaker) — those are
+# intentional narrowings, not real incompatibilities.
 reportIncompatibleVariableOverride = false
+
+[tool.mutmut]
+# Run with: `pdm run mutmut run` (slow). View results: `pdm run mutmut results`.
+# Mutmut copies sources into `mutants/` and runs pytest from there. The
+# `also_copy` entry below ships the badge output dir so pytest-local-badge's
+# plugin-load assertion is satisfied — without it pytest aborts before
+# collecting tests.
+paths_to_mutate = ["src/async_timer/", "src/mock_async_timer/"]
+tests_dir = ["tests/"]
+also_copy = ["docs/badges/"]
 
 [tool.pytest.ini_options]
 addopts = "-v -l --color=yes --cov=async_timer --cov=mock_async_timer --cov-report term-missing --no-cov-on-fail --local-badge-output-dir docs/badges/"

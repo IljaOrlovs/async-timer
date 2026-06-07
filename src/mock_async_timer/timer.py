@@ -49,7 +49,20 @@ class MockPacemaker(async_timer.pacemaker.TimerPacemaker):
 
 
 class MockTimer(async_timer.Timer):
-    """Timer subclass using `MockPacemaker` — no real sleeps. Full Timer API."""
+    """Timer subclass with mocked sleep — ticks fire as fast as the loop
+    can schedule them. Full Timer API.
+
+        from mock_async_timer import MockTimer
+
+        async def test_periodic_refresh():
+            calls = 0
+            def tick():
+                nonlocal calls
+                calls += 1
+            async with MockTimer(0.1, tick) as t:
+                await t.wait(hits=3)
+            assert calls == 3
+    """
 
     pacemaker: MockPacemaker
 

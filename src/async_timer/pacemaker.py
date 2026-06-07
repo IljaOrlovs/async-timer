@@ -1,8 +1,23 @@
+"""Tick scheduler for `Timer` — `TimerPacemaker`.
+
+Async iterator owning the *when* (Timer owns the *what*). Two modes:
+`"fixed_delay"` schedules the next tick `delay` after the previous
+*finishes* (drifts under slow targets); `"fixed_rate"` anchors to
+`t0 + n*delay` and skips+logs overrun slots (no catch-up).
+
+`initial_delay` shifts the first tick; `jitter` (∈ `[0, 1]`) perturbs
+per-tick sleeps by `±base*jitter`. `trigger()` cuts an in-progress
+sleep short (re-anchors in fixed_rate). `_reset()` re-arms a stopped
+instance for `Timer.start()` to restart.
+"""
+
 import asyncio
 import logging
 import random
 import time
 import typing
+
+from ._common import _validate_nonnegative, _validate_unit_range
 
 logger = logging.getLogger(__name__)
 
@@ -10,20 +25,7 @@ PacemakerMode = typing.Literal["fixed_delay", "fixed_rate"]
 
 
 class TimerPacemaker:
-    """Async-iterable that yields once per `delay` seconds.
-
-    Modes:
-      * `"fixed_delay"`: next tick fires `delay` after the previous
-        one *finishes* (schedule drifts under slow consumers).
-      * `"fixed_rate"`: ticks anchored to `t0 + n*delay`; missed
-        slots are skipped and a warning is logged.
-
-    `initial_delay` adds a leading sleep before the first tick.
-    `jitter` (fraction in [0, 1]) perturbs each per-tick sleep to
-    avoid thundering-herd. Iteration ends on `stop()` or when any
-    `stop_on()` awaitable resolves. `_reset()` lets one instance be
-    reused across Timer start/cancel cycles.
-    """
+    """Async-iterable that yields once per tick. See module docstring."""
 
     delay: float
     mode: PacemakerMode
@@ -47,12 +49,9 @@ class TimerPacemaker:
         initial_delay: float = 0.0,
         jitter: float = 0.0,
     ):
-        if delay < 0:
-            raise ValueError(f"delay must be >= 0, got {delay!r}")
-        if jitter < 0 or jitter > 1:
-            raise ValueError(f"jitter must be in [0, 1], got {jitter!r}")
-        if initial_delay < 0:
-            raise ValueError(f"initial_delay must be >= 0, got {initial_delay!r}")
+        _validate_nonnegative(delay, "delay")
+        _validate_unit_range(jitter, "jitter")
+        _validate_nonnegative(initial_delay, "initial_delay")
         if mode not in ("fixed_delay", "fixed_rate"):
             raise ValueError(
                 f"mode must be 'fixed_delay' or 'fixed_rate', got {mode!r}"
@@ -142,7 +141,6 @@ class TimerPacemaker:
             wait_for = self._compute_fixed_rate_wait()
         else:
             wait_for = self._apply_jitter(self.delay)
-            self._tick_number += 1
 
         if wait_for <= 0:
             await asyncio.sleep(0)  # always yield to avoid starvation
@@ -188,11 +186,12 @@ class TimerPacemaker:
 
     def _apply_jitter(self, base: float, cap: typing.Optional[float] = None) -> float:
         if self.jitter == 0:
-            return base
-        delta = base * self.jitter * random.uniform(-1, 1)
-        out = base + delta
-        if out < 0:
-            out = 0.0
+            out = base
+        else:
+            delta = base * self.jitter * random.uniform(-1, 1)
+            out = base + delta
+            if out < 0:
+                out = 0.0
         if cap is not None and out > cap:
             out = cap
         return out

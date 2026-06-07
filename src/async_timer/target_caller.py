@@ -57,7 +57,11 @@ class Caller(typing.Generic[T]):
         self.get_next_val = self._wrap_generator(target)
         if self.get_next_val:
             return self.get_next_val()  # target *is* an iterator
-        assert callable(target), "target must be callable"
+        if not callable(target):
+            raise TypeError(
+                f"Timer target must be callable, an (async) generator, or an "
+                f"iterator; got {type(target).__name__}"
+            )
         target_rv = target()
         self.get_next_val = self._wrap_generator(target_rv)
         if self.get_next_val:
@@ -73,7 +77,11 @@ class Caller(typing.Generic[T]):
                 rv = self._setup(self.target)
                 self.first_call = False
             else:
-                assert self.get_next_val is not None
+                if self.get_next_val is None:  # pragma: no cover - invariant
+                    raise RuntimeError(
+                        "Caller.next() called before first-call setup; "
+                        "this indicates a Timer lifecycle bug."
+                    )
                 rv = self.get_next_val()
         except StopIteration as _err:
             raise StopAsyncIteration() from _err

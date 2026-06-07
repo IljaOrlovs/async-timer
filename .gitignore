@@ -216,6 +216,10 @@ poetry.toml
 # ruff
 .ruff_cache/
 
+# mutmut
+mutants/
+.mutmut-cache
+
 # LSP config files
 pyrightconfig.json
 

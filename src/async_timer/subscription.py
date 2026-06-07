@@ -17,6 +17,8 @@ import asyncio
 import logging
 import typing
 
+from ._common import _validate_nonnegative
+
 T = typing.TypeVar("T")
 logger = logging.getLogger(__name__)
 
@@ -61,8 +63,7 @@ class Subscription(typing.Generic[T]):
         *,
         name: typing.Optional[str] = None,
     ):
-        if maxsize < 0:
-            raise ValueError(f"maxsize must be >= 0, got {maxsize!r}")
+        _validate_nonnegative(maxsize, "maxsize")
         self._queue = asyncio.Queue(maxsize=maxsize)
         self._maxsize = maxsize
         self._closed = False
@@ -135,8 +136,7 @@ class Subscription(typing.Generic[T]):
         end-of-stream / exception sentinel so termination signals are
         never lost. Each drop counts toward `dropped_count`.
         """
-        if n < 0:
-            raise ValueError(f"n must be >= 0, got {n!r}")
+        _validate_nonnegative(n, "n")
         dropped = 0
         for _ in range(n):
             try:

@@ -47,6 +47,10 @@ def every(
 
     All Timer kwargs (mode, jitter, etc.) are forwarded. The undecorated
     function is exposed as `.func` on the returned object.
+
+    Note: `cancel_aws` is single-shot — the awaitables are consumed on
+    first start, so the decorated timer cannot be restarted after a
+    stop signal. Construct a new Timer if you need restart semantics.
     """
 
     def _decorator(func: TimerMainTaskT[T]) -> DecoratedTimer[T]:

@@ -81,7 +81,7 @@ Two lines do the heavy lifting:
   successful refresh.
 
 More recipes: [docs/recipes/](docs/recipes/). Runnable scripts:
-[examples/](examples/).
+[docs/examples/](docs/examples/).
 
 ## Features
 
@@ -104,8 +104,8 @@ More recipes: [docs/recipes/](docs/recipes/). Runnable scripts:
   (awaitables that stop the timer when they resolve). `await cancel()`
   waits for cleanup before returning; safe from inside the
   target/callbacks.
-* **Restartable.** `start()` after `cancel()` works (raises if
-  `cancel_aws` was used — those are single-shot).
+* **Restartable.** `start()` after `cancel()` works (raises
+  `TimerRestartError` if `cancel_aws` was used — those are single-shot).
 * **Decorator.** `@async_timer.every(5)` wraps a function into a
   Timer; original on `.func`.
 * **Groups.** `TimerGroup()` starts/cancels a set of timers together.
@@ -271,6 +271,44 @@ async with timer.subscribe() as feed:
 `drop_oldest()` never swallows end-of-stream / exception sentinels.
 Target exceptions re-raise from the subscriber's iteration.
 
+### Tests with `MockTimer`
+
+`mock_async_timer.MockTimer` is a drop-in `Timer` subclass that
+replaces the real sleep with an `AsyncMock`, so ticks fire as fast as
+the loop can schedule them — no wall-clock waits in tests:
+
+```python
+from mock_async_timer import MockTimer
+
+async def test_periodic_refresh():
+    calls = 0
+    def tick():
+        nonlocal calls
+        calls += 1
+    async with MockTimer(0.1, tick) as t:
+        await t.wait(hits=3)
+    assert calls == 3
+```
+
+Same surface as `Timer` — `join`, `wait`, `trigger`, `subscribe`,
+`TimerGroup`, decorator wrapping all work the same way.
+
+## Exceptions
+
+All library-raised errors derive from `async_timer.TimerError`, which
+itself inherits from `RuntimeError` for back-compat with existing
+`except RuntimeError` clauses:
+
+| Exception | Raised when |
+| --- | --- |
+| `TimerAlreadyRunningError` | `start()` called on a running timer |
+| `TimerNotRunningError` | `trigger()` / `join()` on a stopped timer |
+| `TimerRestartError` | `start()` after `cancel()` on a Timer built with `cancel_aws` (single-shot) |
+| `ThreadsafeDispatchError` | `*_threadsafe` called from the bound loop thread, before start, or after the loop closed |
+
+Catch `TimerError` to filter only library-originated errors; catch a
+specific subclass for finer control.
+
 ## Thread safety
 
 A `Timer` runs in a single asyncio event loop. Most state-mutating
@@ -296,10 +334,10 @@ result = timer.trigger_threadsafe(timeout=5.0)
 feed.close_threadsafe()
 ```
 
-These raise `RuntimeError` with a clear message if called from the
-timer's own loop thread (use `await cancel()` / `await trigger()`
-instead), or if the timer has not been started yet, or if the bound
-event loop has been closed.
+These raise `ThreadsafeDispatchError` (a `RuntimeError` subclass) with
+a clear message if called from the timer's own loop thread (use
+`await cancel()` / `await trigger()` instead), or if the timer has
+not been started yet, or if the bound event loop has been closed.
 
 Anything else (`subscribe()`, awaiting `join()` / `wait()`, iterating
 `async for` over the timer or a subscription, reading from a

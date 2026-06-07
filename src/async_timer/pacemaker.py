@@ -1,3 +1,26 @@
+"""Tick scheduler for `Timer` — `TimerPacemaker`.
+
+The pacemaker is an async iterator yielding once per tick. It owns the
+*when*; `Timer` owns the *what* (target call, fanout, subscribers).
+
+Two modes:
+
+* `"fixed_delay"`: next tick fires `delay` seconds after the previous
+  one *finishes*. Schedule drifts under slow targets.
+* `"fixed_rate"`: ticks anchored to `t0 + n*delay`. If a target call
+  overruns its slot, missed slots are skipped (not queued) and a
+  warning is logged.
+
+Optional `initial_delay` adds a leading sleep before the first tick.
+Optional `jitter` (fraction in `[0, 1]`) perturbs per-tick sleeps by
+`±base*jitter` to avoid thundering-herd at scale.
+
+`trigger()` cuts an in-progress sleep short so the next tick fires
+now; in `fixed_rate` mode this re-anchors the schedule (no catch-up).
+`stop()` ends iteration; `_reset()` re-arms a stopped instance so
+`Timer.start()` can restart it.
+"""
+
 import asyncio
 import logging
 import random
@@ -12,20 +35,7 @@ PacemakerMode = typing.Literal["fixed_delay", "fixed_rate"]
 
 
 class TimerPacemaker:
-    """Async-iterable that yields once per `delay` seconds.
-
-    Modes:
-      * `"fixed_delay"`: next tick fires `delay` after the previous
-        one *finishes* (schedule drifts under slow consumers).
-      * `"fixed_rate"`: ticks anchored to `t0 + n*delay`; missed
-        slots are skipped and a warning is logged.
-
-    `initial_delay` adds a leading sleep before the first tick.
-    `jitter` (fraction in [0, 1]) perturbs each per-tick sleep to
-    avoid thundering-herd. Iteration ends on `stop()` or when any
-    `stop_on()` awaitable resolves. `_reset()` lets one instance be
-    reused across Timer start/cancel cycles.
-    """
+    """Async-iterable that yields once per tick. See module docstring."""
 
     delay: float
     mode: PacemakerMode

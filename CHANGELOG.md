@@ -7,6 +7,51 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added — exception hierarchy
+
+- `async_timer.TimerError` base class with subclasses
+  `TimerAlreadyRunningError`, `TimerNotRunningError`,
+  `TimerRestartError`, and `ThreadsafeDispatchError`. All inherit from
+  `RuntimeError` so existing `except RuntimeError` clauses keep
+  working; catch `TimerError` to filter only library-originated
+  errors. The previously-raw `RuntimeError`s from `start()`,
+  `trigger()`, and the `*_threadsafe` methods now use the typed
+  subclasses (messages unchanged).
+
+### Added — property tests (hypothesis)
+
+- New `tests/property/` suite with 17 hypothesis property tests for
+  pacemaker math, subscription drop semantics, and the validation
+  helpers. Caught a real bug in `TimerPacemaker._apply_jitter`: the
+  early-return on `jitter == 0` bypassed the `cap` argument, so a
+  caller passing `base > cap` would receive `base`. Fixed; the only
+  current callsite (fixed-rate scheduling) is unaffected because it
+  passes `base == cap`.
+
+### Changed — internal refactor
+
+- Extracted shared helpers into `async_timer._common`:
+  `_validate_nonnegative`, `_validate_unit_range`,
+  `_resolve_threadsafe_loop`, `_run_threadsafe`. Eliminates duplicated
+  validation and cross-thread-dispatch boilerplate across
+  `pacemaker.py`, `subscription.py`, `timer.py`, and `group.py`. No
+  behavior change.
+- Removed dead `_tick_number += 1` increment in `TimerPacemaker`'s
+  `fixed_delay` path — that attribute is only consumed by
+  `_compute_fixed_rate_wait` (fixed-rate only), so the write was pure
+  overhead.
+- Replaced two `assert`s in `Caller` with explicit `TypeError` /
+  `RuntimeError` so the guards survive `python -O`.
+
+### Added — test ergonomics
+
+- 6 targeted mutation-guard tests for `TimerPacemaker` lock down the
+  `cancel_aws` warning behavior, `stop()` idempotency, `_reset()`
+  cancel-event clearing, and the jitter-cap regression.
+- `mutmut` and `hypothesis` added as dev dependencies; `[tool.mutmut]`
+  config in `pyproject.toml` with notes on known mutmut-3.x friction
+  with this src-layout.
+
 ## [1.2.1] - 2026-05-22
 
 ### Added — `TimerGroup` parity with `Timer`

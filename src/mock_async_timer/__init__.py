@@ -2,3 +2,5 @@
 
 from . import timer
 from .timer import MockTimer
+
+__all__ = ["MockTimer", "timer"]

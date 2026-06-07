@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-07
+
 ### Added — exception hierarchy
 
 - `async_timer.TimerError` base class with subclasses
@@ -49,8 +51,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `cancel_aws` warning behavior, `stop()` idempotency, `_reset()`
   cancel-event clearing, and the jitter-cap regression.
 - `mutmut` and `hypothesis` added as dev dependencies; `[tool.mutmut]`
-  config in `pyproject.toml` with notes on known mutmut-3.x friction
-  with this src-layout.
+  config in `pyproject.toml` (with `also_copy = ["docs/badges/"]` to
+  satisfy `pytest-local-badge`'s plugin-load assertion when pytest runs
+  from `mutants/`). Baseline sweep: 608 killed / 135 survived / 13
+  timeout of 756 mutants (~80% kill rate). Survivors are predominantly
+  equivalent mutants (log-string edits, falsy→falsy substitutions);
+  no critical-logic gap found in a sampled review.
 
 ## [1.2.1] - 2026-05-22
 
@@ -239,7 +245,8 @@ Initial public release.
 
 First tagged release.
 
-[Unreleased]: https://github.com/IljaOrlovs/async-timer/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/IljaOrlovs/async-timer/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.6...v1.2.0
 [1.1.6]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/IljaOrlovs/async-timer/compare/v1.1.4...v1.1.5

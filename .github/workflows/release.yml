@@ -36,6 +36,15 @@ jobs:
           inputs: |
             ./dist/*.whl
             ./dist/*.tar.gz
+      - name: Move Sigstore bundles out of dist/
+        # `pypa/gh-action-pypi-publish` runs `twine check dist/*` internally
+        # and trips on `*.sigstore.json` ("InvalidDistribution: Unknown
+        # distribution format"). Park signatures elsewhere so dist/ holds
+        # only wheels + sdists at publish time; the GitHub Release step
+        # below picks them up from `signatures/`.
+        run: |
+          mkdir -p signatures
+          mv dist/*.sigstore.json signatures/
       - name: Publish to Test PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -65,5 +74,5 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
-            dist/*.sigstore
+            signatures/*.sigstore.json
           fail_on_unmatched_files: true
